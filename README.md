@@ -15,12 +15,7 @@ Open the URL printed by Vite (usually `http://localhost:5173`).
 
 ### Mock (default)
 - No API key needed.
-- Returns deterministic JSON so you can test the whole loop:
-  - meta/normal modes
-  - options buttons
-  - external dice roll
-  - inventory updates
-  - localStorage save/load
+- Returns deterministic JSON so you can test the whole loop.
 
 ### OpenAI (BYOK, for local testing only)
 - Paste your OpenAI API key into the UI. It is stored in `localStorage`.
@@ -28,7 +23,11 @@ Open the URL printed by Vite (usually `http://localhost:5173`).
   - Do **NOT** use a high-privilege key.
   - Do **NOT** deploy this build publicly with a real key.
 
-## Why no backend?
-This repo starts with the simplest option (A).
+## Mode
+- **Normal**: story/game mode.
+- **Meta**: out-of-character mode for Q&A / editing settings.
+
+## Next step (requested)
+We are adding a **simple chat mode** that calls the LLM API with minimal prompt rules and **no memory management** (send only the latest user message + a small optional system prompt).
 
 For real deployment, move LLM calls to a backend proxy (Option B) and store API keys in server environment variables.

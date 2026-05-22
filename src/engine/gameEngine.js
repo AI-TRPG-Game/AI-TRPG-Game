@@ -57,3 +57,23 @@ export async function runTurn({
 
   return obj;
 }
+
+/**
+ * Step-1: simplest plain text chat.
+ * - UI looks like chat, but we do NOT do memory management.
+ * - If provider=openai, call OpenAI with (optional) systemPrompt + userText only.
+ * - If provider=mock, echo a deterministic response.
+ */
+export async function runSimpleChat({ provider, apiKey, model, systemPrompt, userText }) {
+  if (provider === 'openai') {
+    if (!apiKey) {
+      throw new Error('OpenAI provider selected but API key is empty.');
+    }
+    const text = await OpenAI.generateSimpleChat({ apiKey, model, systemPrompt, userText });
+    return { text };
+  }
+
+  // mock
+  const text = `（Mock）你刚才说：${userText}\n\n提示：切换到 OpenAI 并输入 Key 可体验真实大模型回复。`;
+  return { text };
+}
