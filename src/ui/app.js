@@ -35,10 +35,11 @@ export function renderApp({ sessionId, session }) {
         <div style="display:flex;gap:8px;">
           <select id="providerSelect">
             <option value="mock">Mock（默认）</option>
+            <option value="deepseek">DeepSeek（BYOK测试）</option>
             <option value="openai">OpenAI（BYOK测试）</option>
           </select>
-          <input id="apiKeyInput" placeholder="OpenAI API Key（仅本地测试，不安全）" style="flex:1;" />
-          <input id="modelInput" value="gpt-4.1-mini" style="width:140px;" />
+          <input id="apiKeyInput" placeholder="API Key（仅本地测试，不安全）" style="flex:1;" />
+          <input id="modelInput" value="deepseek-v4-flash" style="width:180px;" />
         </div>
 
         <details>
@@ -84,9 +85,9 @@ export function renderApp({ sessionId, session }) {
   const chatModeEls = Array.from(app.querySelectorAll('input[name="chatMode"]'));
 
   // persist settings
-  el.apiKeyInput.value = localStorage.getItem("ai_trpg_openai_key") || "";
+  el.apiKeyInput.value = localStorage.getItem("ai_trpg_api_key") || "";
   el.providerSelect.value = localStorage.getItem("ai_trpg_provider") || "mock";
-  el.modelInput.value = localStorage.getItem("ai_trpg_model") || "gpt-4.1-mini";
+  el.modelInput.value = localStorage.getItem("ai_trpg_model") || "deepseek-v4-flash";
   el.systemPromptInput.value = localStorage.getItem('ai_trpg_simple_system_prompt') || '';
 
   function getChatMode() {
@@ -187,10 +188,19 @@ export function renderApp({ sessionId, session }) {
     if (e.key === "Enter") el.sendBtn.click();
   });
 
-  el.providerSelect.onchange = () =>
+  el.providerSelect.onchange = () => {
     localStorage.setItem("ai_trpg_provider", el.providerSelect.value);
+    // convenience defaults
+    if (el.providerSelect.value === 'deepseek' && (!el.modelInput.value || el.modelInput.value.startsWith('gpt-'))) {
+      el.modelInput.value = 'deepseek-v4-flash';
+    }
+    if (el.providerSelect.value === 'openai' && (!el.modelInput.value || el.modelInput.value.startsWith('deepseek-'))) {
+      el.modelInput.value = 'gpt-4.1-mini';
+    }
+    localStorage.setItem("ai_trpg_model", el.modelInput.value);
+  };
   el.apiKeyInput.oninput = () =>
-    localStorage.setItem("ai_trpg_openai_key", el.apiKeyInput.value);
+    localStorage.setItem("ai_trpg_api_key", el.apiKeyInput.value);
   el.modelInput.oninput = () =>
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
   el.systemPromptInput.oninput = () =>

@@ -2,13 +2,26 @@ import { roll } from "./dice.js";
 import { tryParseJson } from "../llm/validator.js";
 import { buildMessages } from "../llm/promptBuilder.js";
 import * as Mock from "../llm/providers/mockProvider.js";
-import * as OpenAI from "../llm/providers/openaiProvider.js";
+import * as OpenAICompat from "../llm/providers/openaiProvider.js";
+
+const PROVIDER_CONFIG = {
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    // DeepSeek is OpenAI-compatible; base URL documented as https://api.deepseek.com
+    // Using /v1 to match the /chat/completions path style.
+    baseUrl: 'https://api.deepseek.com/v1',
+  },
+};
 
 export async function runTurn({
   mode,
   session,
   userText,
-  provider, // "mock" | "openai"
+  provider, // "mock" | "openai" | "deepseek"
   apiKey,
   model,
 }) {
@@ -17,12 +30,17 @@ export async function runTurn({
 
   // 1) Ask provider for structured JSON
   let raw;
-  if (provider === "openai") {
+  if (provider === "openai" || provider === 'deepseek') {
     if (!apiKey) {
-      throw new Error("OpenAI provider selected but API key is empty.");
+      throw new Error(`${PROVIDER_CONFIG[provider].label} provider selected but API key is empty.`);
     }
     const messages = buildMessages({ mode, state, userText, lastRoll });
-    raw = await OpenAI.generate({ apiKey, model, messages });
+    raw = await OpenAICompat.generate({
+      baseUrl: PROVIDER_CONFIG[provider].baseUrl,
+      apiKey,
+      model,
+      messages,
+    });
   } else {
     raw = await Mock.generate({ mode, state, userText });
   }
@@ -61,19 +79,24 @@ export async function runTurn({
 /**
  * Step-1: simplest plain text chat.
  * - UI looks like chat, but we do NOT do memory management.
- * - If provider=openai, call OpenAI with (optional) systemPrompt + userText only.
- * - If provider=mock, echo a deterministic response.
  */
 export async function runSimpleChat({ provider, apiKey, model, systemPrompt, userText }) {
-  if (provider === 'openai') {
+  if (provider === 'openai' || provider === 'deepseek') {
+    const conf = PROVIDER_CONFIG[provider];
     if (!apiKey) {
-      throw new Error('OpenAI provider selected but API key is empty.');
+      throw new Error(`${conf.label} provider selected but API key is empty.`);
     }
-    const text = await OpenAI.generateSimpleChat({ apiKey, model, systemPrompt, userText });
+    const text = await OpenAICompat.generateSimpleChat({
+      baseUrl: conf.baseUrl,
+      apiKey,
+      model,
+      systemPrompt,
+      userText,
+    });
     return { text };
   }
 
   // mock
-  const text = `（Mock）你刚才说：${userText}\n\n提示：切换到 OpenAI 并输入 Key 可体验真实大模型回复。`;
+  const text = `（Mock）你刚才说：${userText}\n\n提示：切换到 DeepSeek 并输入 Key 可体验真实大模型回复。`;
   return { text };
 }
