@@ -25,8 +25,9 @@ export function renderApp({ sessionId, session }) {
           <select id="providerSelect">
             <option value="mock">Mock（默认）</option>
             <option value="openai">OpenAI（BYOK测试）</option>
+            <option value="openrouter">OpenRouter（BYOK测试）</option>
           </select>
-          <input id="apiKeyInput" placeholder="OpenAI API Key（仅本地测试，不安全）" style="flex:1;" />
+          <input id="apiKeyInput" placeholder="API Key（仅本地测试，不安全）" style="flex:1;" />
           <input id="modelInput" value="gpt-4.1-mini" style="width:140px;" />
         </div>
 
@@ -63,10 +64,24 @@ export function renderApp({ sessionId, session }) {
     newSessionBtn: app.querySelector("#newSessionBtn"),
   };
 
+  function getKeyStorageKey(provider) {
+    return provider === "openrouter" ? "ai_trpg_openrouter_key" : "ai_trpg_openai_key";
+  }
+
+  function updateProviderUi() {
+    const provider = el.providerSelect.value;
+    const keyStorage = getKeyStorageKey(provider);
+    el.apiKeyInput.value = localStorage.getItem(keyStorage) || "";
+    el.apiKeyInput.placeholder =
+      provider === "openrouter"
+        ? "OpenRouter API Key（仅本地测试，不安全）"
+        : "OpenAI API Key（仅本地测试，不安全）";
+  }
+
   // persist settings
-  el.apiKeyInput.value = localStorage.getItem("ai_trpg_openai_key") || "";
   el.providerSelect.value = localStorage.getItem("ai_trpg_provider") || "mock";
   el.modelInput.value = localStorage.getItem("ai_trpg_model") || "gpt-4.1-mini";
+  updateProviderUi();
 
   function renderSessionList(currentId) {
     const sessions = listSessions();
@@ -149,10 +164,14 @@ export function renderApp({ sessionId, session }) {
     if (e.key === "Enter") el.sendBtn.click();
   });
 
-  el.providerSelect.onchange = () =>
+  el.providerSelect.onchange = () => {
     localStorage.setItem("ai_trpg_provider", el.providerSelect.value);
-  el.apiKeyInput.oninput = () =>
-    localStorage.setItem("ai_trpg_openai_key", el.apiKeyInput.value);
+    updateProviderUi();
+  };
+  el.apiKeyInput.oninput = () => {
+    const keyStorage = getKeyStorageKey(el.providerSelect.value);
+    localStorage.setItem(keyStorage, el.apiKeyInput.value);
+  };
   el.modelInput.oninput = () =>
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
 

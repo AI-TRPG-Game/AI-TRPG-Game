@@ -28,6 +28,11 @@ Open the URL printed by Vite (usually `http://localhost:5173`).
   - Do **NOT** use a high-privilege key.
   - Do **NOT** deploy this build publicly with a real key.
 
+### OpenRouter (BYOK, for local testing only)
+- Choose OpenRouter in the provider dropdown and paste your OpenRouter API key.
+- Use an OpenRouter model name (for example `openai/gpt-4.1-mini`).
+- The key is stored in `localStorage` and has the same browser-side security risks as above.
+
 ## Why no backend?
 This repo starts with the simplest option (A).
 

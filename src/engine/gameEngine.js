@@ -3,12 +3,13 @@ import { tryParseJson } from "../llm/validator.js";
 import { buildMessages } from "../llm/promptBuilder.js";
 import * as Mock from "../llm/providers/mockProvider.js";
 import * as OpenAI from "../llm/providers/openaiProvider.js";
+import * as OpenRouter from "../llm/providers/openrouterProvider.js";
 
 export async function runTurn({
   mode,
   session,
   userText,
-  provider, // "mock" | "openai"
+  provider, // "mock" | "openai" | "openrouter"
   apiKey,
   model,
 }) {
@@ -23,6 +24,12 @@ export async function runTurn({
     }
     const messages = buildMessages({ mode, state, userText, lastRoll });
     raw = await OpenAI.generate({ apiKey, model, messages });
+  } else if (provider === "openrouter") {
+    if (!apiKey) {
+      throw new Error("OpenRouter provider selected but API key is empty.");
+    }
+    const messages = buildMessages({ mode, state, userText, lastRoll });
+    raw = await OpenRouter.generate({ apiKey, model, messages });
   } else {
     raw = await Mock.generate({ mode, state, userText });
   }
