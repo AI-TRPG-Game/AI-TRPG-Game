@@ -3,6 +3,7 @@ import { tryParseJson } from "../llm/validator.js";
 import { buildMessages } from "../llm/promptBuilder.js";
 import * as Mock from "../llm/providers/mockProvider.js";
 import * as OpenAICompat from "../llm/providers/openaiProvider.js";
+import { runSimpleChatWithOptions } from "./simpleOptions.js";
 
 const PROVIDER_CONFIG = {
   openai: {
@@ -11,8 +12,6 @@ const PROVIDER_CONFIG = {
   },
   deepseek: {
     label: 'DeepSeek',
-    // DeepSeek is OpenAI-compatible; base URL documented as https://api.deepseek.com
-    // Using /v1 to match the /chat/completions path style.
     baseUrl: 'https://api.deepseek.com/v1',
   },
 };
@@ -78,14 +77,33 @@ export async function runTurn({
 
 /**
  * Step-1: simplest plain text chat.
- * - UI looks like chat, but we do NOT do memory management.
+ * Step-2 (optional): enforce A/B/C/D options at end.
  */
-export async function runSimpleChat({ provider, apiKey, model, systemPrompt, userText }) {
+export async function runSimpleChat({
+  provider,
+  apiKey,
+  model,
+  systemPrompt,
+  userText,
+  enforceOptions = false,
+}) {
   if (provider === 'openai' || provider === 'deepseek') {
     const conf = PROVIDER_CONFIG[provider];
     if (!apiKey) {
       throw new Error(`${conf.label} provider selected but API key is empty.`);
     }
+
+    if (enforceOptions) {
+      const r = await runSimpleChatWithOptions({
+        baseUrl: conf.baseUrl,
+        apiKey,
+        model,
+        systemPrompt,
+        userText,
+      });
+      return r;
+    }
+
     const text = await OpenAICompat.generateSimpleChat({
       baseUrl: conf.baseUrl,
       apiKey,
@@ -93,10 +111,24 @@ export async function runSimpleChat({ provider, apiKey, model, systemPrompt, use
       systemPrompt,
       userText,
     });
-    return { text };
+    return { text, options: [] };
   }
 
   // mock
+  if (enforceOptions) {
+    const text = `（Mock）你刚才说：${userText}\n\nA. 继续探索前方\nB. 仔细观察周围\nC. 打开背包检查物品\nD. 自由活动：说出你的自由行动`;
+    return {
+      text: `（Mock）你刚才说：${userText}`,
+      options: [
+        { key: 'A', text: '继续探索前方' },
+        { key: 'B', text: '仔细观察周围' },
+        { key: 'C', text: '打开背包检查物品' },
+        { key: 'D', text: '自由活动：说出你的自由行动' },
+      ],
+      raw: text,
+    };
+  }
+
   const text = `（Mock）你刚才说：${userText}\n\n提示：切换到 DeepSeek 并输入 Key 可体验真实大模型回复。`;
-  return { text };
+  return { text, options: [] };
 }
