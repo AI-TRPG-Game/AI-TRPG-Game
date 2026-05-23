@@ -16,6 +16,30 @@ function nextNpcName(base, existingNames) {
   return `${base}#${i}`;
 }
 
+function parsePcCard(text) {
+  if (!text || typeof text !== 'string') return null;
+  // Very lightweight schema: extract by labels if present; otherwise keep raw.
+  const get = (label) => {
+    const re = new RegExp(`${label}\\s*[:：]\\s*(.+)`, 'i');
+    return re.exec(text)?.[1]?.trim() || '';
+  };
+  const card = {
+    name: get('姓名') || '',
+    age: get('年龄') || '',
+    gender: get('性别') || '',
+    race: get('种族') || '',
+    personality: get('性格') || '',
+    appearance: get('外貌') || '',
+    background: get('家世与教育背景') || '',
+    other: get('其余') || '',
+    raw: text.trim(),
+  };
+
+  // Require at least name; otherwise treat as invalid.
+  if (!card.name) return null;
+  return card;
+}
+
 export function renderApp({ sessionId, session }) {
   const app = document.querySelector('#app');
   app.innerHTML = `
@@ -100,6 +124,8 @@ export function renderApp({ sessionId, session }) {
 
         <div id="options" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
 
+        <div id="pcDraft" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
+
         <div id="npcProposals" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
 
         <div style="display:flex;gap:8px;">
@@ -120,6 +146,7 @@ export function renderApp({ sessionId, session }) {
   const el = {
     chat: app.querySelector('#chat'),
     options: app.querySelector('#options'),
+    pcDraft: app.querySelector('#pcDraft'),
     npcProposals: app.querySelector('#npcProposals'),
     textInput: app.querySelector('#textInput'),
     sendBtn: app.querySelector('#sendBtn'),
@@ -145,8 +172,9 @@ export function renderApp({ sessionId, session }) {
 
   const chatModeEls = Array.from(app.querySelectorAll('input[name="chatMode"]'));
 
-  // UI-only state: pending NPC proposals require explicit user save
+  // UI-only state: pending proposals require explicit user save
   let pendingNpcs = [];
+  let pendingPc = null;
 
   // persist settings
   el.apiKeyInput.value = localStorage.getItem('ai_trpg_api_key') || '';
@@ -210,6 +238,56 @@ export function renderApp({ sessionId, session }) {
       };
       el.options.appendChild(btn);
     }
+  }
+
+  function renderPcDraft() {
+    if (!pendingPc) {
+      el.pcDraft.style.display = 'none';
+      el.pcDraft.innerHTML = '';
+      return;
+    }
+
+    el.pcDraft.style.display = 'block';
+    el.pcDraft.innerHTML = `<div style="font-weight:600;margin-bottom:6px;">主角设定草稿（可一键存档）</div>`;
+
+    const pre = document.createElement('pre');
+    pre.style.whiteSpace = 'pre-wrap';
+    pre.style.margin = '0 0 8px 0';
+    pre.textContent = pendingPc.raw;
+    el.pcDraft.appendChild(pre);
+
+    const btnSave = document.createElement('button');
+    btnSave.textContent = '存档当前人物设定（覆盖主角）';
+    btnSave.onclick = () => {
+      session.state.pc = {
+        name: pendingPc.name,
+        age: pendingPc.age,
+        gender: pendingPc.gender,
+        race: pendingPc.race,
+        personality: pendingPc.personality,
+        appearance: pendingPc.appearance,
+        background: pendingPc.background,
+        other: pendingPc.other,
+        raw: pendingPc.raw,
+        at: new Date().toISOString(),
+      };
+      pendingPc = null;
+      updateSession(sessionId, (s) => Object.assign(s, session));
+      renderState();
+      renderPcDraft();
+      alert('已存档主角设定。');
+    };
+
+    const btnClear = document.createElement('button');
+    btnClear.textContent = '清空草稿';
+    btnClear.style.marginLeft = '8px';
+    btnClear.onclick = () => {
+      pendingPc = null;
+      renderPcDraft();
+    };
+
+    el.pcDraft.appendChild(btnSave);
+    el.pcDraft.appendChild(btnClear);
   }
 
   function renderNpcProposals() {
@@ -340,12 +418,19 @@ export function renderApp({ sessionId, session }) {
         pendingNpcs = proposals;
       }
 
+      // PC schema: in setup_pc phase, allow 1-click save
+      if ((result.next?.phase || phase) === Phase.setup_pc || phase === Phase.setup_pc) {
+        const pc = parsePcCard(result.text);
+        if (pc) pendingPc = pc;
+      }
+
       session.phase = result.next?.phase || phase;
       el.phaseSelect.value = session.phase;
 
       updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
       renderState();
+      renderPcDraft();
       renderNpcProposals();
       renderOptions(enforceOptions ? result.options || [] : []);
     } catch (e) {
@@ -384,7 +469,7 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.setup_pc;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
-    insertIntoInput('请生成主角设定（你可以先描述主角概念）：');
+    insertIntoInput('请按“姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余”生成主角设定：');
   };
 
   el.btnOpening.onclick = () => {
@@ -458,6 +543,7 @@ export function renderApp({ sessionId, session }) {
   renderSessionList(sessionId);
   renderChat();
   renderState();
+  renderPcDraft();
   renderNpcProposals();
   renderOptions([]);
 }

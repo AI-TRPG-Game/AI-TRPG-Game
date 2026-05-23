@@ -1,4 +1,4 @@
-const KEY = 'ai_trpg_sessions_v2';
+const KEY = 'ai_trpg_sessions_v3';
 
 function nowIso() {
   return new Date().toISOString();
@@ -23,44 +23,42 @@ function setAll(list) {
 }
 
 function ensureWorldState(session) {
-  // Migrate legacy shape if needed.
   session.state = session.state || {};
 
-  // Docs: WorldState DB separate from narrative history.
-  // In this MVP, we keep it under session.state but with doc-aligned fields.
   if (!('world_background' in session.state)) {
-    // Backward compat: map from legacy `world` if exists
     session.state.world_background = session.state.world || '默认世界观：小镇与一座废弃教堂。';
   }
 
   if (!('pc' in session.state)) {
-    // Backward compat: map from legacy `character`
     const ch = session.state.character || { name: '调查员', hp: 10, san: 10 };
     session.state.pc = {
       name: ch.name,
+      age: '',
+      gender: '',
+      race: '',
+      personality: '',
+      appearance: '',
+      background: '',
+      other: '',
       hp: ch.hp,
       san: ch.san,
-      description: '',
+      raw: '',
     };
   }
 
   if (!('npcs' in session.state)) session.state.npcs = [];
   if (!('inventory' in session.state)) session.state.inventory = session.state.inventory || [];
 
-  // quests
   if (!('quest_core' in session.state)) session.state.quest_core = '';
   if (!('quest_current' in session.state)) {
     session.state.quest_current = session.state.quest || '';
   }
 
-  // rulesets/templates
   if (!('rulesets' in session.state)) session.state.rulesets = {};
 
-  // dice
   if (!('diceLog' in session.state)) session.state.diceLog = session.state.diceLog || [];
   if (!('lastRoll' in session.state)) session.state.lastRoll = session.state.lastRoll || null;
 
-  // conversation memory fields (minimal)
   session.summary = session.summary || '';
 }
 
@@ -76,13 +74,25 @@ export function createSession() {
     title: '新剧本',
     createdAt: nowIso(),
     updatedAt: nowIso(),
-    mode: 'normal', // normal | meta
+    mode: 'normal',
     phase: 'setup_world',
     messages: [],
     summary: '',
     state: {
       world_background: '默认世界观：小镇与一座废弃教堂。',
-      pc: { name: '调查员', hp: 10, san: 10, description: '' },
+      pc: {
+        name: '调查员',
+        age: '',
+        gender: '',
+        race: '',
+        personality: '',
+        appearance: '',
+        background: '',
+        other: '',
+        hp: 10,
+        san: 10,
+        raw: '',
+      },
       npcs: [],
       quest_core: '',
       quest_current: '当前任务：调查教堂的怪声。',

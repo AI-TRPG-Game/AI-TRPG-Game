@@ -2,7 +2,9 @@ import { FlowType, Phase } from './flows.js';
 
 const DEFAULT_RULESETS = {
   pc_card_format:
-    '姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余（用清晰分段输出）',
+    '姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余（必须逐项给出，每项一行，使用“字段名：内容”格式）',
+  npc_card_format:
+    '姓名（无则以简短描述代替） | 与主角关系 | 详细描述（同一行用“|”分隔）',
   opening_format:
     '输出：开幕自然叙述（氛围+地点+现状）\n再用自然语言回顾主角设定并衔接背景\n最后给出核心任务/钩子。',
   normal_output_format:
@@ -19,10 +21,6 @@ function json(x) {
   }
 }
 
-/**
- * Input Assembler (prompt builder) for flows.
- * Returns a system prompt string for generateSimpleChat.
- */
 export function buildFlowPrompt({
   flowType,
   mode,
@@ -47,11 +45,9 @@ export function buildFlowPrompt({
     json({
       world_background: worldState?.world_background,
       pc: worldState?.pc,
-      // keep only a short tail to reduce prompt bloat
       npcs_tail: (worldState?.npcs || []).slice(-6),
       quest_core: worldState?.quest_core,
       quest_current: worldState?.quest_current,
-      inventory: worldState?.inventory,
       dice_log_tail: (worldState?.diceLog || []).slice(-3),
       lastRoll: worldState?.lastRoll || null,
     }),
@@ -73,10 +69,10 @@ export function buildFlowPrompt({
       base,
       '你现在处于【Meta/主角设定】阶段。',
       '目标：根据世界观与用户输入生成主角卡。',
-      `主角卡格式要求：${rulesets.pc_card_format}`,
-      '不要推进剧情，不要掷骰，不要输出A/B/C/D。',
+      `主角卡必须严格按以下 schema 输出：${rulesets.pc_card_format}`,
+      '输出时不要夹杂额外段落、不要使用项目符号、不要输出A/B/C/D。',
       stateBlock,
-      '请只输出主角卡内容（按格式分段）。',
+      '请只输出主角卡内容（严格逐项）。',
     ].join('\n\n');
   }
 
@@ -102,7 +98,6 @@ export function buildFlowPrompt({
     ].join('\n\n');
   }
 
-  // NORMAL_TURN
   const checkBlock = checkResult
     ? `【系统检定结果（事实）】\n${json(checkResult)}`
     : '';
@@ -112,6 +107,7 @@ export function buildFlowPrompt({
     `你现在处于【Normal/${mode === 'meta' ? 'Meta' : 'Playing'}】阶段。`,
     '请推进剧情，并在结尾提供A/B/C/D四个选项（D为自由活动）。',
     rulesets.normal_output_format,
+    `重要人物卡格式：${rulesets.npc_card_format}`,
     stateBlock,
     checkBlock,
     '用户本回合提交的行动/输入：',
