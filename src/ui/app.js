@@ -1,11 +1,20 @@
 import { runNarrative } from '../engine/narrativeEngine.js';
 import { FlowType, Phase } from '../engine/flows.js';
+import { parseNpcProposals } from '../engine/simpleOptions.js';
 import {
   updateSession,
   listSessions,
   createSession,
   loadSession,
 } from '../store/stateStore.js';
+
+function nextNpcName(base, existingNames) {
+  if (!base) base = '(未命名)';
+  if (!existingNames.has(base)) return base;
+  let i = 2;
+  while (existingNames.has(`${base}#${i}`)) i += 1;
+  return `${base}#${i}`;
+}
 
 export function renderApp({ sessionId, session }) {
   const app = document.querySelector('#app');
@@ -91,6 +100,8 @@ export function renderApp({ sessionId, session }) {
 
         <div id="options" style="display:flex;flex-wrap:wrap;gap:8px;"></div>
 
+        <div id="npcProposals" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
+
         <div style="display:flex;gap:8px;">
           <input id="textInput" style="flex:1;padding:10px;border-radius:8px;border:1px solid #ddd;" placeholder="输入你的行动或问题..." />
           <button id="sendBtn">发送</button>
@@ -109,6 +120,7 @@ export function renderApp({ sessionId, session }) {
   const el = {
     chat: app.querySelector('#chat'),
     options: app.querySelector('#options'),
+    npcProposals: app.querySelector('#npcProposals'),
     textInput: app.querySelector('#textInput'),
     sendBtn: app.querySelector('#sendBtn'),
     metaToggle: app.querySelector('#metaToggle'),
@@ -132,6 +144,9 @@ export function renderApp({ sessionId, session }) {
   };
 
   const chatModeEls = Array.from(app.querySelectorAll('input[name="chatMode"]'));
+
+  // UI-only state: pending NPC proposals require explicit user save
+  let pendingNpcs = [];
 
   // persist settings
   el.apiKeyInput.value = localStorage.getItem('ai_trpg_api_key') || '';
@@ -190,12 +205,73 @@ export function renderApp({ sessionId, session }) {
       const label = typeof o === 'string' ? o : `${o.key}. ${o.text}`;
       btn.textContent = label;
       btn.onclick = () => {
-        // Doc requirement: option click should NOT auto-send.
         if (typeof o === 'string') insertIntoInput(o);
         else insertIntoInput(`${o.key}. ${o.text}`);
       };
       el.options.appendChild(btn);
     }
+  }
+
+  function renderNpcProposals() {
+    if (!pendingNpcs.length) {
+      el.npcProposals.style.display = 'none';
+      el.npcProposals.innerHTML = '';
+      return;
+    }
+
+    el.npcProposals.style.display = 'block';
+    el.npcProposals.innerHTML = `<div style="font-weight:600;margin-bottom:6px;">待存档人物（需要你确认）</div>`;
+
+    const existingNames = new Set((session.state.npcs || []).map((n) => n.name));
+
+    pendingNpcs.forEach((npc, idx) => {
+      const wrap = document.createElement('div');
+      wrap.style.borderTop = '1px solid #eee';
+      wrap.style.paddingTop = '6px';
+      wrap.style.marginTop = '6px';
+
+      const name = npc.name || '(未命名)';
+      const relation = npc.relation || '';
+      const desc = npc.description || '';
+
+      wrap.innerHTML = `
+        <div><b>${escapeHtml(name)}</b> ${relation ? `（${escapeHtml(relation)}）` : ''}</div>
+        <div style="font-size:12px;color:#555;white-space:pre-wrap;">${escapeHtml(desc)}</div>
+      `;
+
+      const btn = document.createElement('button');
+      btn.textContent = '角色存档';
+      btn.onclick = () => {
+        const finalName = nextNpcName(name, existingNames);
+        existingNames.add(finalName);
+
+        session.state.npcs = session.state.npcs || [];
+        session.state.npcs.push({
+          name: finalName,
+          relation,
+          description: desc,
+          at: new Date().toISOString(),
+        });
+
+        // remove from pending
+        pendingNpcs.splice(idx, 1);
+        updateSession(sessionId, (s) => Object.assign(s, session));
+        renderState();
+        renderNpcProposals();
+      };
+
+      wrap.appendChild(btn);
+      el.npcProposals.appendChild(wrap);
+    });
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '清空待存档';
+    clearBtn.style.marginTop = '8px';
+    clearBtn.onclick = () => {
+      pendingNpcs = [];
+      renderNpcProposals();
+    };
+    el.npcProposals.appendChild(clearBtn);
   }
 
   async function submit(text) {
@@ -216,7 +292,6 @@ export function renderApp({ sessionId, session }) {
       const systemPrompt = el.systemPromptInput.value;
 
       if (chatMode === 'game') {
-        // legacy
         const result = await runNarrative({
           session,
           provider,
@@ -258,12 +333,20 @@ export function renderApp({ sessionId, session }) {
         mode,
         phase: result.next?.phase || phase,
       });
+
+      // parse npc proposals from assistant text, but do NOT auto-save
+      const proposals = parseNpcProposals(result.text);
+      if (proposals.length) {
+        pendingNpcs = proposals;
+      }
+
       session.phase = result.next?.phase || phase;
       el.phaseSelect.value = session.phase;
 
       updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
       renderState();
+      renderNpcProposals();
       renderOptions(enforceOptions ? result.options || [] : []);
     } catch (e) {
       session.messages.push({
@@ -288,7 +371,6 @@ export function renderApp({ sessionId, session }) {
     if (e.key === 'Enter') el.sendBtn.click();
   });
 
-  // Doc-aligned buttons: set phase + insert helper text
   el.btnWorldSetup.onclick = () => {
     el.metaToggle.checked = true;
     session.phase = Phase.setup_world;
@@ -376,6 +458,7 @@ export function renderApp({ sessionId, session }) {
   renderSessionList(sessionId);
   renderChat();
   renderState();
+  renderNpcProposals();
   renderOptions([]);
 }
 

@@ -6,7 +6,7 @@ const DEFAULT_RULESETS = {
   opening_format:
     '输出：开幕自然叙述（氛围+地点+现状）\n再用自然语言回顾主角设定并衔接背景\n最后给出核心任务/钩子。',
   normal_output_format:
-    '输出：\n1) 正常叙述推进\n2) 如出现重要NPC，用“重要人物：”段落列出（姓名（无则短描述）- 与主角关系 - 详细描述）\n3) 结尾必须给四个选项：A/B/C 为剧情行动，D 为自由活动。',
+    '输出：\n1) 正常叙述推进\n2) 如果出现重要NPC，请加一个“重要人物：”段落（放在选项之前），格式为：\n   重要人物：\n   - 姓名 | 与主角关系 | 详细描述\n   - ...\n3) 结尾必须给四个选项：A/B/C/D。D 必须以“自由活动：”开头。',
   check_format:
     '只输出三行：\nneeds_check: yes|no\ndice: d20|d100\nreason: <一句话原因>\n不要输出其它文字。',
 };
@@ -47,7 +47,8 @@ export function buildFlowPrompt({
     json({
       world_background: worldState?.world_background,
       pc: worldState?.pc,
-      npcs: worldState?.npcs,
+      // keep only a short tail to reduce prompt bloat
+      npcs_tail: (worldState?.npcs || []).slice(-6),
       quest_core: worldState?.quest_core,
       quest_current: worldState?.quest_current,
       inventory: worldState?.inventory,
@@ -118,7 +119,8 @@ export function buildFlowPrompt({
     '',
     '输出要求：',
     '1) 先叙事正文',
-    '2) 结尾必须严格四行选项：',
+    '2) 若出现重要NPC，请在选项之前加“重要人物：”段落（按指定格式，每行一条，以"- "开头）',
+    '3) 结尾必须严格四行选项：',
     'A. ...',
     'B. ...',
     'C. ...',

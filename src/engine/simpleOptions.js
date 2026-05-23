@@ -24,7 +24,6 @@ export function parseABCDOptions(text) {
   const dIdx = findLine('D.');
   if ([aIdx, bIdx, cIdx, dIdx].some((x) => x < 0)) return null;
 
-  // Ensure order (end-ish); allow some extra trailing whitespace but not extra content after D.
   if (!(aIdx < bIdx && bIdx < cIdx && cIdx < dIdx)) return null;
 
   const narrative = lines.slice(0, aIdx).join('\n').trim();
@@ -51,8 +50,6 @@ export function parseABCDOptions(text) {
  *  needs_check: yes|no
  *  dice: d20|d100
  *  reason: ...
- *
- * This parser is intentionally permissive.
  */
 export function parseCheckDecision(text) {
   if (!text || typeof text !== 'string') return null;
@@ -67,4 +64,39 @@ export function parseCheckDecision(text) {
   const reason = /reason\s*:\s*(.+)/i.exec(text)?.[1]?.trim() || null;
 
   return { needsCheck, sides, reason };
+}
+
+/**
+ * Parse NPC proposals from a tagged text section.
+ * Format (A chosen by user):
+ * 
+ * 重要人物：
+ * - 姓名 | 与主角关系 | 详细描述
+ * - （可多条）
+ *
+ * Returns [] if none.
+ */
+export function parseNpcProposals(text) {
+  if (!text || typeof text !== 'string') return [];
+  const m = /(^|\n)重要人物：\s*\n([\s\S]*?)(\n\s*\n|\nA\.|$)/.exec(text);
+  if (!m) return [];
+
+  const block = m[2] || '';
+  const lines = block
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const out = [];
+  for (const l of lines) {
+    if (!l.startsWith('-')) continue;
+    const body = l.replace(/^\-\s*/, '').trim();
+    const parts = body.split('|').map((x) => x.trim());
+    const name = parts[0] || '';
+    const relation = parts[1] || '';
+    const description = parts.slice(2).join(' | ').trim();
+    if (!name && !description) continue;
+    out.push({ name: name || '(未命名)', relation, description });
+  }
+  return out;
 }
