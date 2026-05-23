@@ -1,7 +1,7 @@
 import { FlowType, Phase } from './flows.js';
 import { buildFlowPrompt } from './inputAssembler.js';
 import { roll } from './dice.js';
-import { parseABCDOptions } from './simpleOptions.js';
+import { parseABCDOptions, parseCheckDecision } from './simpleOptions.js';
 import { generateSimpleChat } from '../llm/providers/openaiProvider.js';
 
 const PROVIDER_CONFIG = {
@@ -20,12 +20,24 @@ function getProviderConf(provider) {
   return null;
 }
 
+async function generateWithProvider({ conf, apiKey, model, systemPrompt, userText }) {
+  return generateSimpleChat({
+    baseUrl: conf.baseUrl,
+    apiKey,
+    model,
+    systemPrompt,
+    userText,
+  });
+}
+
 /**
- * Lightweight orchestrator aligned with docs.
- * - Maintains {mode, phase}
- * - Supports different flow types
- * - Enforces A/B/C/D format (via prompt) and parses options to buttons
- * - Optional 1-retry on format failure
+ * Orchestrator aligned with docs.
+ * - InputAssemble: buildFlowPrompt
+ * - Output parsing: ABCD options, check decision
+ * - Rule engine: crypto dice
+ * - Two-stage pipeline for playing turns:
+ *    1) CHECK_REQUEST (if needed)
+ *    2) NORMAL_TURN with checkResult
  */
 export async function runFlowTurn({
   session,
@@ -39,7 +51,7 @@ export async function runFlowTurn({
   systemPrompt,
   retryOnFormatFailure = true,
 }) {
-  // mock provider
+  // Mock provider for offline testing
   if (provider === 'mock') {
     const raw = `（Mock）${flowType} 收到：${userText}\n\nA. 继续\nB. 修改设定\nC. 查看状态\nD. 自由活动：输入你的自由行动`;
     const parsed = parseABCDOptions(raw);
@@ -57,60 +69,70 @@ export async function runFlowTurn({
 
   const worldState = session.state;
 
-  // For checking pipeline: in this MVP we simplify by always doing NORMAL_TURN directly.
-  // But we keep placeholders for CHECK_REQUEST and dice.
+  async function callOnce({ flowType: ft, userText: ut, checkResult }) {
+    const sys = buildFlowPrompt({
+      flowType: ft,
+      mode,
+      worldState,
+      userText: ut,
+      systemPrompt,
+      checkResult,
+    });
+    return generateWithProvider({ conf, apiKey, model, systemPrompt: sys, userText: ut });
+  }
+
+  // --------- Main flow handling ---------
   let checkResult = null;
 
-  const system = buildFlowPrompt({
-    flowType,
-    mode,
-    worldState,
-    userText,
-    systemPrompt,
-    checkResult,
-  });
+  // If we are in playing phase (or NORMAL_TURN) we run the check pipeline first.
+  const shouldRunPipeline =
+    mode === 'normal' &&
+    (phase === Phase.playing || phase === Phase.opening || flowType === FlowType.NORMAL_TURN);
 
-  async function callOnce(userText2) {
-    return generateSimpleChat({
-      baseUrl: conf.baseUrl,
-      apiKey,
-      model,
-      systemPrompt: system,
-      userText: userText2,
+  if (shouldRunPipeline) {
+    // 1) Ask for check decision
+    const checkRaw = await callOnce({
+      flowType: FlowType.CHECK_REQUEST,
+      userText,
+      checkResult: null,
     });
-  }
 
-  let raw = await callOnce(userText);
-  let parsed = parseABCDOptions(raw);
-
-  // one-retry repair if needed
-  if (!parsed && retryOnFormatFailure) {
-    const retryUser = `请把你刚才的回复【重写一次】，必须严格以A/B/C/D四行选项结尾，并且D必须以“自由活动：”开头。只输出最终正文+选项，不要解释规则。`;
-    raw = await callOnce(retryUser);
-    parsed = parseABCDOptions(raw);
-  }
-
-  // If still fails, degrade
-  const text = parsed?.narrative || raw;
-  const options = parsed?.options || [];
-
-  // very small: if flowType is CHECK_REQUEST and model suggests check, we could roll.
-  // (Not implemented: would require reliable parse. Placeholder for next step.)
-  if (flowType === FlowType.CHECK_REQUEST) {
-    // Example: always roll a d20 for now if user text includes "检定" keywords.
-    if (/检定|掷骰|判定|潜行|攻击|开锁|侦查/.test(userText)) {
-      const rr = roll({ sides: 20, reason: '行动检定' });
+    const decision = parseCheckDecision(checkRaw);
+    if (decision?.needsCheck) {
+      // 2) System rolls dice
+      const rr = roll({ sides: decision.sides || 20, reason: decision.reason || '行动检定' });
       session.state.diceLog.push(rr);
       session.state.lastRoll = rr;
       checkResult = rr;
     }
   }
 
-  // Phase transitions (minimal)
+  // 3) Generate final narrative for the requested flowType
+  let raw = await callOnce({ flowType, userText, checkResult });
+  let parsed = parseABCDOptions(raw);
+
+  // one-retry repair if needed
+  if (!parsed && retryOnFormatFailure) {
+    const retryUser =
+      '请把你刚才的回复【重写一次】并满足：\n' +
+      '1) 正文在上，\n' +
+      '2) 结尾必须严格包含四行选项：A./B./C./D.，\n' +
+      '3) D 必须以“自由活动：”开头，\n' +
+      '4) 不要输出多余解释、不要输出 Markdown 代码块。';
+
+    raw = await callOnce({ flowType, userText: retryUser, checkResult });
+    parsed = parseABCDOptions(raw);
+  }
+
+  const text = parsed?.narrative || raw;
+  const options = parsed?.options || [];
+
+  // Phase transitions (minimal but useful)
   let nextPhase = phase;
   if (flowType === FlowType.WORLD_GEN) nextPhase = Phase.setup_world;
   if (flowType === FlowType.PC_GEN) nextPhase = Phase.setup_pc;
   if (flowType === FlowType.OPENING) nextPhase = Phase.opening;
+  if (flowType === FlowType.CHECK_REQUEST) nextPhase = Phase.checking;
   if (flowType === FlowType.NORMAL_TURN) nextPhase = Phase.playing;
 
   return {

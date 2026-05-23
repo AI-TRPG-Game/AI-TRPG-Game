@@ -1,14 +1,14 @@
-import { runNarrative } from "../engine/narrativeEngine.js";
-import { FlowType, Phase } from "../engine/flows.js";
+import { runNarrative } from '../engine/narrativeEngine.js';
+import { FlowType, Phase } from '../engine/flows.js';
 import {
   updateSession,
   listSessions,
   createSession,
   loadSession,
-} from "../store/stateStore.js";
+} from '../store/stateStore.js';
 
 export function renderApp({ sessionId, session }) {
-  const app = document.querySelector("#app");
+  const app = document.querySelector('#app');
   app.innerHTML = `
     <div style="display:grid;grid-template-columns:2fr 1fr;height:100vh;font-family:system-ui;">
       <div style="padding:12px;border-right:1px solid #eee;display:flex;flex-direction:column;gap:8px;">
@@ -36,6 +36,14 @@ export function renderApp({ sessionId, session }) {
             <input id="flowToggle" type="checkbox" checked />
             <span>启用叙事Flow</span>
           </label>
+        </div>
+
+        <!-- Doc-aligned buttons -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button id="btnWorldSetup">开启故事设定（世界观）</button>
+          <button id="btnPCSetup">开启设定主角</button>
+          <button id="btnOpening">故事开幕</button>
+          <button id="btnAcceptQuest">接收任务</button>
         </div>
 
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -99,31 +107,36 @@ export function renderApp({ sessionId, session }) {
   `;
 
   const el = {
-    chat: app.querySelector("#chat"),
-    options: app.querySelector("#options"),
-    textInput: app.querySelector("#textInput"),
-    sendBtn: app.querySelector("#sendBtn"),
-    metaToggle: app.querySelector("#metaToggle"),
+    chat: app.querySelector('#chat'),
+    options: app.querySelector('#options'),
+    textInput: app.querySelector('#textInput'),
+    sendBtn: app.querySelector('#sendBtn'),
+    metaToggle: app.querySelector('#metaToggle'),
     flowToggle: app.querySelector('#flowToggle'),
     phaseSelect: app.querySelector('#phaseSelect'),
     flowTypeSelect: app.querySelector('#flowTypeSelect'),
     enforceOptionsToggle: app.querySelector('#enforceOptionsToggle'),
-    stateView: app.querySelector("#stateView"),
-    saveStateBtn: app.querySelector("#saveStateBtn"),
-    providerSelect: app.querySelector("#providerSelect"),
-    apiKeyInput: app.querySelector("#apiKeyInput"),
-    modelInput: app.querySelector("#modelInput"),
-    sessionSelect: app.querySelector("#sessionSelect"),
-    newSessionBtn: app.querySelector("#newSessionBtn"),
+    stateView: app.querySelector('#stateView'),
+    saveStateBtn: app.querySelector('#saveStateBtn'),
+    providerSelect: app.querySelector('#providerSelect'),
+    apiKeyInput: app.querySelector('#apiKeyInput'),
+    modelInput: app.querySelector('#modelInput'),
+    sessionSelect: app.querySelector('#sessionSelect'),
+    newSessionBtn: app.querySelector('#newSessionBtn'),
     systemPromptInput: app.querySelector('#systemPromptInput'),
+
+    btnWorldSetup: app.querySelector('#btnWorldSetup'),
+    btnPCSetup: app.querySelector('#btnPCSetup'),
+    btnOpening: app.querySelector('#btnOpening'),
+    btnAcceptQuest: app.querySelector('#btnAcceptQuest'),
   };
 
   const chatModeEls = Array.from(app.querySelectorAll('input[name="chatMode"]'));
 
   // persist settings
-  el.apiKeyInput.value = localStorage.getItem("ai_trpg_api_key") || "";
-  el.providerSelect.value = localStorage.getItem("ai_trpg_provider") || "mock";
-  el.modelInput.value = localStorage.getItem("ai_trpg_model") || "deepseek-v4-flash";
+  el.apiKeyInput.value = localStorage.getItem('ai_trpg_api_key') || '';
+  el.providerSelect.value = localStorage.getItem('ai_trpg_provider') || 'mock';
+  el.modelInput.value = localStorage.getItem('ai_trpg_model') || 'deepseek-v4-flash';
   el.systemPromptInput.value = localStorage.getItem('ai_trpg_system_prompt') || '';
   el.flowToggle.checked = localStorage.getItem('ai_trpg_flow_enabled') !== 'false';
   el.enforceOptionsToggle.checked = localStorage.getItem('ai_trpg_enforce_options') !== 'false';
@@ -134,29 +147,29 @@ export function renderApp({ sessionId, session }) {
 
   function getChatMode() {
     const picked = chatModeEls.find((x) => x.checked);
-    return picked?.value || "simple";
+    return picked?.value || 'simple';
   }
 
   function renderSessionList(currentId) {
     const sessions = listSessions();
     el.sessionSelect.innerHTML = sessions
       .map((s) => `<option value="${s.id}">${escapeHtml(s.title)}</option>`)
-      .join("");
+      .join('');
     el.sessionSelect.value = currentId;
   }
 
   function renderChat() {
     el.chat.innerHTML = session.messages
       .map((m) => {
-        const bg = m.role === "user" ? "#dff2ff" : "#fff";
-        const modeTag = m.mode ? ` · ${escapeHtml(m.mode)}` : "";
-        const phaseTag = m.phase ? ` · ${escapeHtml(m.phase)}` : "";
+        const bg = m.role === 'user' ? '#dff2ff' : '#fff';
+        const modeTag = m.mode ? ` · ${escapeHtml(m.mode)}` : '';
+        const phaseTag = m.phase ? ` · ${escapeHtml(m.phase)}` : '';
         return `<div style="margin:6px 0;padding:8px;border-radius:8px;background:${bg};border:1px solid #eee;">
         <div style="font-size:12px;color:#666;">${escapeHtml(m.role)}${modeTag}${phaseTag}</div>
-        <div>${escapeHtml(m.content).replaceAll("\n", "<br/>")}</div>
+        <div>${escapeHtml(m.content).replaceAll('\n', '<br/>')}</div>
       </div>`;
       })
-      .join("");
+      .join('');
     el.chat.scrollTop = el.chat.scrollHeight;
   }
 
@@ -164,30 +177,36 @@ export function renderApp({ sessionId, session }) {
     el.stateView.textContent = JSON.stringify(session.state, null, 2);
   }
 
+  function insertIntoInput(text) {
+    const cur = el.textInput.value || '';
+    el.textInput.value = cur ? `${cur}\n${text}` : text;
+    el.textInput.focus();
+  }
+
   function renderOptions(opts) {
-    el.options.innerHTML = "";
+    el.options.innerHTML = '';
     for (const o of opts) {
-      const btn = document.createElement("button");
+      const btn = document.createElement('button');
       const label = typeof o === 'string' ? o : `${o.key}. ${o.text}`;
       btn.textContent = label;
       btn.onclick = () => {
-        if (typeof o === 'string') submit(o);
-        else submit(o.text);
+        // Doc requirement: option click should NOT auto-send.
+        if (typeof o === 'string') insertIntoInput(o);
+        else insertIntoInput(`${o.key}. ${o.text}`);
       };
       el.options.appendChild(btn);
     }
   }
 
   async function submit(text) {
-    const mode = el.metaToggle.checked ? "meta" : "normal";
+    const mode = el.metaToggle.checked ? 'meta' : 'normal';
     const provider = el.providerSelect.value;
     const chatMode = getChatMode();
     const flowEnabled = el.flowToggle.checked;
     const phase = el.phaseSelect.value;
     const selectedFlowType = el.flowTypeSelect.value || null;
 
-    // user message
-    session.messages.push({ role: "user", content: text, mode, phase });
+    session.messages.push({ role: 'user', content: text, mode, phase });
     updateSession(sessionId, (s) => Object.assign(s, session));
     renderChat();
 
@@ -196,7 +215,7 @@ export function renderApp({ sessionId, session }) {
       const model = el.modelInput.value.trim();
       const systemPrompt = el.systemPromptInput.value;
 
-      if (chatMode === "game") {
+      if (chatMode === 'game') {
         // legacy
         const result = await runNarrative({
           session,
@@ -211,7 +230,7 @@ export function renderApp({ sessionId, session }) {
           selectedFlowType: null,
         });
 
-        session.messages.push({ role: "assistant", content: result.text, mode, phase });
+        session.messages.push({ role: 'assistant', content: result.text, mode, phase });
         updateSession(sessionId, (s) => Object.assign(s, session));
         renderChat();
         renderState();
@@ -219,7 +238,6 @@ export function renderApp({ sessionId, session }) {
         return;
       }
 
-      // simple chat with flow
       const enforceOptions = el.enforceOptionsToggle.checked;
       const result = await runNarrative({
         session,
@@ -234,17 +252,22 @@ export function renderApp({ sessionId, session }) {
         selectedFlowType,
       });
 
-      session.messages.push({ role: "assistant", content: result.text, mode, phase: result.next?.phase || phase });
+      session.messages.push({
+        role: 'assistant',
+        content: result.text,
+        mode,
+        phase: result.next?.phase || phase,
+      });
       session.phase = result.next?.phase || phase;
       el.phaseSelect.value = session.phase;
 
       updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
       renderState();
-      renderOptions(enforceOptions ? (result.options || []) : []);
+      renderOptions(enforceOptions ? result.options || [] : []);
     } catch (e) {
       session.messages.push({
-        role: "assistant",
+        role: 'assistant',
         content: `【错误】${e.message}`,
         mode,
         phase,
@@ -257,40 +280,63 @@ export function renderApp({ sessionId, session }) {
   el.sendBtn.onclick = () => {
     const t = el.textInput.value.trim();
     if (!t) return;
-    el.textInput.value = "";
+    el.textInput.value = '';
     submit(t);
   };
 
-  el.textInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") el.sendBtn.click();
+  el.textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') el.sendBtn.click();
   });
 
-  el.providerSelect.onchange = () => {
-    localStorage.setItem("ai_trpg_provider", el.providerSelect.value);
-    if (
-      el.providerSelect.value === "deepseek" &&
-      (!el.modelInput.value || el.modelInput.value.startsWith("gpt-"))
-    ) {
-      el.modelInput.value = "deepseek-v4-flash";
-    }
-    if (
-      el.providerSelect.value === "openai" &&
-      (!el.modelInput.value || el.modelInput.value.startsWith("deepseek-"))
-    ) {
-      el.modelInput.value = "gpt-4.1-mini";
-    }
-    localStorage.setItem("ai_trpg_model", el.modelInput.value);
+  // Doc-aligned buttons: set phase + insert helper text
+  el.btnWorldSetup.onclick = () => {
+    el.metaToggle.checked = true;
+    session.phase = Phase.setup_world;
+    el.phaseSelect.value = session.phase;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    insertIntoInput('请根据关键词生成世界观与背景：');
   };
 
-  el.apiKeyInput.oninput = () =>
-    localStorage.setItem("ai_trpg_api_key", el.apiKeyInput.value);
-  el.modelInput.oninput = () =>
-    localStorage.setItem("ai_trpg_model", el.modelInput.value);
-  el.systemPromptInput.oninput = () =>
-    localStorage.setItem('ai_trpg_system_prompt', el.systemPromptInput.value);
+  el.btnPCSetup.onclick = () => {
+    el.metaToggle.checked = true;
+    session.phase = Phase.setup_pc;
+    el.phaseSelect.value = session.phase;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    insertIntoInput('请生成主角设定（你可以先描述主角概念）：');
+  };
 
-  el.flowToggle.onchange = () =>
-    localStorage.setItem('ai_trpg_flow_enabled', String(el.flowToggle.checked));
+  el.btnOpening.onclick = () => {
+    el.metaToggle.checked = false;
+    session.phase = Phase.opening;
+    el.phaseSelect.value = session.phase;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    insertIntoInput('故事开幕。');
+  };
+
+  el.btnAcceptQuest.onclick = () => {
+    el.metaToggle.checked = false;
+    session.phase = Phase.playing;
+    el.phaseSelect.value = session.phase;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    insertIntoInput('我接收任务，并准备采取行动。');
+  };
+
+  el.providerSelect.onchange = () => {
+    localStorage.setItem('ai_trpg_provider', el.providerSelect.value);
+    if (el.providerSelect.value === 'deepseek' && (!el.modelInput.value || el.modelInput.value.startsWith('gpt-'))) {
+      el.modelInput.value = 'deepseek-v4-flash';
+    }
+    if (el.providerSelect.value === 'openai' && (!el.modelInput.value || el.modelInput.value.startsWith('deepseek-'))) {
+      el.modelInput.value = 'gpt-4.1-mini';
+    }
+    localStorage.setItem('ai_trpg_model', el.modelInput.value);
+  };
+
+  el.apiKeyInput.oninput = () => localStorage.setItem('ai_trpg_api_key', el.apiKeyInput.value);
+  el.modelInput.oninput = () => localStorage.setItem('ai_trpg_model', el.modelInput.value);
+  el.systemPromptInput.oninput = () => localStorage.setItem('ai_trpg_system_prompt', el.systemPromptInput.value);
+
+  el.flowToggle.onchange = () => localStorage.setItem('ai_trpg_flow_enabled', String(el.flowToggle.checked));
   el.enforceOptionsToggle.onchange = () =>
     localStorage.setItem('ai_trpg_enforce_options', String(el.enforceOptionsToggle.checked));
 
@@ -301,16 +347,16 @@ export function renderApp({ sessionId, session }) {
 
   el.saveStateBtn.onclick = () => {
     if (!el.metaToggle.checked) {
-      alert("建议只在 Meta 模式下修改状态面板。");
+      alert('建议只在 Meta 模式下修改状态面板。');
       return;
     }
     try {
       const next = JSON.parse(el.stateView.textContent);
       session.state = next;
       updateSession(sessionId, (s) => Object.assign(s, session));
-      alert("已保存。下一轮将按新设定运行。");
+      alert('已保存。下一轮将按新设定运行。');
     } catch (e) {
-      alert("右侧不是合法 JSON，无法保存。");
+      alert('右侧不是合法 JSON，无法保存。');
     }
   };
 
@@ -336,11 +382,11 @@ export function renderApp({ sessionId, session }) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#039;",
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;',
     })[c]
   );
 }

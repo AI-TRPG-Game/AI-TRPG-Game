@@ -1,9 +1,9 @@
-import { runTurn } from "./gameEngine.js";
-import { runFlowTurn } from "./orchestrator.js";
-import { FlowType, Phase } from "./flows.js";
+import { runTurn } from './gameEngine.js';
+import { runFlowTurn } from './orchestrator.js';
+import { FlowType, Phase } from './flows.js';
 
 /**
- * Legacy structured game engine (JSON loop) + new flow-based orchestrator.
+ * Legacy structured game engine (JSON loop) + flow-based orchestrator.
  */
 export async function runNarrative({
   session,
@@ -18,7 +18,6 @@ export async function runNarrative({
   selectedFlowType,
 }) {
   if (!flowEnabled) {
-    // fallback to old structured JSON engine
     const r = await runTurn({ mode, session, userText, provider, apiKey, model });
     return {
       text: r.narrative,
@@ -28,7 +27,6 @@ export async function runNarrative({
     };
   }
 
-  // Determine flow type from phase / user selection
   const flowType = selectedFlowType || inferFlowType({ phase, mode });
 
   return runFlowTurn({
@@ -46,6 +44,7 @@ export async function runNarrative({
 }
 
 export function inferFlowType({ phase, mode }) {
+  // meta mode uses setup phases
   if (mode === 'meta') {
     if (phase === Phase.setup_world) return FlowType.WORLD_GEN;
     if (phase === Phase.setup_pc) return FlowType.PC_GEN;

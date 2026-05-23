@@ -1,105 +1,70 @@
-import { generateSimpleChat } from "../llm/providers/openaiProvider.js";
-
-const OPTION_LABELS = ['A', 'B', 'C', 'D'];
-
-/**
- * Build a format-enforcing system prompt to make the model output A/B/C/D options.
- * @param {{baseSystemPrompt: string}} params
- */
-export function buildOptionsSystemPrompt({ baseSystemPrompt }) {
-  const base = (baseSystemPrompt || '').trim();
-  const rules = `
-你是一个文字冒险/跑团主持人(KP)。
-请用中文回复。
-
-【输出格式强制要求】
-- 你的回复必须以四个选项结尾，并严格使用以下格式（每行一个选项）：
-A. <选项内容>
-B. <选项内容>
-C. <选项内容>
-D. 自由活动：<选项内容>
-
-- D 选项必须以“自由活动：”开头。
-- 选项内容要具体、可执行。
-- 除了选项之外，你可以先输出1-6段剧情/旁白。
-`;
-
-  return [base, rules].filter(Boolean).join('\n\n');
-}
+// Parsing helpers for the “A/B/C/D options” transitional format
+// and a minimal check-decision format.
 
 /**
- * Parse the last A/B/C/D options from model output.
- * Returns null if not found.
- *
- * @param {string} text
- * @returns {{ narrative: string, options: Array<{key: 'A'|'B'|'C'|'D', text: string}> } | null}
+ * Parse A/B/C/D options at end of assistant output.
+ * Accepts lines like:
+ *  A. xxx
+ *  B. xxx
+ *  C. xxx
+ *  D. 自由活动：xxx
  */
 export function parseABCDOptions(text) {
-  if (!text) return null;
+  if (!text || typeof text !== 'string') return null;
+  const lines = text.split(/\r?\n/);
 
-  // Accept variations like "A." "A、" "A)" "A：" and whitespace.
-  const line = (label) => `(?:^|\n)\s*${label}\s*[\.、\)\:]\s*(.+?)\s*(?=\n|$)`;
-  const re = new RegExp(
-    `${line('A')}${line('B')}${line('C')}${line('D')}`,
-    's'
-  );
+  function findLine(prefix) {
+    const idx = lines.findIndex((l) => l.trim().startsWith(prefix));
+    return idx;
+  }
 
-  const m = text.match(re);
-  if (!m) return null;
+  const aIdx = findLine('A.');
+  const bIdx = findLine('B.');
+  const cIdx = findLine('C.');
+  const dIdx = findLine('D.');
+  if ([aIdx, bIdx, cIdx, dIdx].some((x) => x < 0)) return null;
 
-  const a = (m[1] || '').trim();
-  const b = (m[2] || '').trim();
-  const c = (m[3] || '').trim();
-  const d = (m[4] || '').trim();
+  // Ensure order (end-ish); allow some extra trailing whitespace but not extra content after D.
+  if (!(aIdx < bIdx && bIdx < cIdx && cIdx < dIdx)) return null;
 
-  // D must start with 自由活动
-  if (!/^自由活动\s*：/.test(d)) return null;
+  const narrative = lines.slice(0, aIdx).join('\n').trim();
 
-  // narrative = everything before the first option label occurrence
-  const idxA = text.search(/\n\s*A\s*[\.、\)\:]/);
-  const narrative = (idxA >= 0 ? text.slice(0, idxA) : '').trim();
-
-  return {
-    narrative: narrative || text.trim(),
-    options: [
-      { key: 'A', text: a },
-      { key: 'B', text: b },
-      { key: 'C', text: c },
-      { key: 'D', text: d },
-    ],
+  const pick = (idx, key) => {
+    const raw = lines[idx].trim();
+    const text2 = raw.slice(2).trim();
+    return { key, text: text2 };
   };
+
+  const options = [pick(aIdx, 'A'), pick(bIdx, 'B'), pick(cIdx, 'C'), pick(dIdx, 'D')];
+
+  // D must be free action in MVP
+  if (!/^自由活动：/.test(options[3].text)) {
+    return null;
+  }
+
+  return { narrative, options };
 }
 
 /**
- * Step-2 (lightweight): ask model to return A/B/C/D options and render as buttons.
- * No memory management: we still send only system + latest user.
+ * Parse a minimal check decision.
+ * We ask the model to output something like:
+ *  needs_check: yes|no
+ *  dice: d20|d100
+ *  reason: ...
+ *
+ * This parser is intentionally permissive.
  */
-export async function runSimpleChatWithOptions({
-  baseUrl,
-  apiKey,
-  model,
-  systemPrompt,
-  userText,
-}) {
-  const enforcedSystemPrompt = buildOptionsSystemPrompt({ baseSystemPrompt: systemPrompt });
+export function parseCheckDecision(text) {
+  if (!text || typeof text !== 'string') return null;
 
-  const raw = await generateSimpleChat({
-    baseUrl,
-    apiKey,
-    model,
-    systemPrompt: enforcedSystemPrompt,
-    userText,
-  });
+  const needs = /needs_check\s*:\s*(yes|no)/i.exec(text);
+  if (!needs) return null;
+  const needsCheck = needs[1].toLowerCase() === 'yes';
 
-  const parsed = parseABCDOptions(raw);
-  if (!parsed) {
-    // If format fails, return raw text and no options.
-    return { text: raw, options: [] };
-  }
+  const dice = /dice\s*:\s*d\s*(\d+)/i.exec(text);
+  const sides = dice ? Number(dice[1]) : null;
 
-  return {
-    text: parsed.narrative,
-    options: parsed.options,
-    raw,
-  };
+  const reason = /reason\s*:\s*(.+)/i.exec(text)?.[1]?.trim() || null;
+
+  return { needsCheck, sides, reason };
 }

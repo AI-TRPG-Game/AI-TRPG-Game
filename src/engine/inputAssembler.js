@@ -1,8 +1,27 @@
-import { FlowType } from './flows.js';
+import { FlowType, Phase } from './flows.js';
+
+const DEFAULT_RULESETS = {
+  pc_card_format:
+    '姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余（用清晰分段输出）',
+  opening_format:
+    '输出：开幕自然叙述（氛围+地点+现状）\n再用自然语言回顾主角设定并衔接背景\n最后给出核心任务/钩子。',
+  normal_output_format:
+    '输出：\n1) 正常叙述推进\n2) 如出现重要NPC，用“重要人物：”段落列出（姓名（无则短描述）- 与主角关系 - 详细描述）\n3) 结尾必须给四个选项：A/B/C 为剧情行动，D 为自由活动。',
+  check_format:
+    '只输出三行：\nneeds_check: yes|no\ndice: d20|d100\nreason: <一句话原因>\n不要输出其它文字。',
+};
+
+function json(x) {
+  try {
+    return JSON.stringify(x, null, 2);
+  } catch {
+    return String(x);
+  }
+}
 
 /**
- * Assemble input for different flows.
- * This is intentionally lightweight and prompt-only for MVP.
+ * Input Assembler (prompt builder) for flows.
+ * Returns a system prompt string for generateSimpleChat.
  */
 export function buildFlowPrompt({
   flowType,
@@ -12,67 +31,98 @@ export function buildFlowPrompt({
   systemPrompt,
   checkResult,
 }) {
-  const base = (systemPrompt || '').trim();
+  const rulesets = worldState?.rulesets || DEFAULT_RULESETS;
 
-  const worldBlock = JSON.stringify(
-    {
-      world_background: worldState?.world_background || worldState?.world || '',
-      quest_core: worldState?.quest_core || '',
-      quest_current: worldState?.quest_current || worldState?.quest || '',
-      pc: worldState?.pc || worldState?.character || null,
-      inventory: worldState?.inventory || [],
-      npcs: worldState?.npcs || [],
+  const base = [
+    '你是TRPG主持人(KP/DM)。',
+    '重要：骰子由系统掷出，你不能编造点数；你只能根据结果叙事。',
+    '重要：输出必须是中文。',
+    systemPrompt && systemPrompt.trim() ? `（额外系统设定）\n${systemPrompt.trim()}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const stateBlock = [
+    '【特殊数据库 WorldState（权威设定）】',
+    json({
+      world_background: worldState?.world_background,
+      pc: worldState?.pc,
+      npcs: worldState?.npcs,
+      quest_core: worldState?.quest_core,
+      quest_current: worldState?.quest_current,
+      inventory: worldState?.inventory,
+      dice_log_tail: (worldState?.diceLog || []).slice(-3),
       lastRoll: worldState?.lastRoll || null,
-      checkResult: checkResult || null,
-    },
-    null,
-    2
-  );
+    }),
+  ].join('\n');
 
-  const optionFormat = `
-【输出格式强制要求】
-- 你的回复必须以四个选项结尾，并严格使用以下格式（每行一个选项）：
-A. <选项内容>
-B. <选项内容>
-C. <选项内容>
-D. 自由活动：<选项内容>
-- D 选项必须以“自由活动：”开头。
-- 选项内容要具体、可执行。
-`;
-
-  // Flow-specific instruction
-  let instruction = '';
-  switch (flowType) {
-    case FlowType.WORLD_GEN:
-      instruction = `你在帮助用户生成“世界观与背景”。请提供一个清晰的世界观与背景（可分点），最后仍然给出A/B/C/D选项（A/B/C用于调整设定方向，D为自由活动）。`;
-      break;
-    case FlowType.PC_GEN:
-      instruction = `你在帮助用户生成“主角人设”。请给出一份主角设定（尽量包含：姓名/年龄/性别/性格/外貌/背景/动机），最后给出A/B/C/D选项（用于微调人物设定）。`;
-      break;
-    case FlowType.OPENING:
-      instruction = `你在生成“故事开幕”。请用1-6段自然语言开幕叙事，引入主角与背景，并给出一个明确的核心任务/线索；最后给出A/B/C/D选项。`;
-      break;
-    case FlowType.CHECK_REQUEST:
-      instruction = `你在做“鉴定判断”（不推进剧情）。请判断用户行动是否需要检定：
-- 若不需要：直接说“无需检定”，并用1-2句解释原因；最后仍给A/B/C/D（用于替代行动）。
-- 若需要：说明需要检定的类型与原因，并建议使用 D20；不要给出骰子点数（系统会掷骰）。最后仍给A/B/C/D。`;
-      break;
-    case FlowType.NORMAL_TURN:
-    default:
-      instruction = `现在是正常叙事推进。根据用户行动推进剧情；如果提供了检定结果，请据此给出成功/失败后果。最后给出A/B/C/D选项。`;
-      break;
+  if (flowType === FlowType.WORLD_GEN) {
+    return [
+      base,
+      '你现在处于【Meta/世界观设定】阶段。',
+      '目标：根据用户关键词生成“世界观与背景”的可编辑文本。',
+      '不要推进剧情，不要掷骰，不要输出A/B/C/D。',
+      stateBlock,
+      '请输出：\n- 世界观与背景（分段）\n- 3条可选的进一步追问/补充方向（用项目符号）',
+    ].join('\n\n');
   }
 
-  const modeRule = mode === 'meta'
-    ? '当前为Meta模式（桌外）：不要强行推进剧情，可以解释、建议、或帮助修改设定。'
-    : '当前为Normal模式（桌内）：推进剧情。';
+  if (flowType === FlowType.PC_GEN) {
+    return [
+      base,
+      '你现在处于【Meta/主角设定】阶段。',
+      '目标：根据世界观与用户输入生成主角卡。',
+      `主角卡格式要求：${rulesets.pc_card_format}`,
+      '不要推进剧情，不要掷骰，不要输出A/B/C/D。',
+      stateBlock,
+      '请只输出主角卡内容（按格式分段）。',
+    ].join('\n\n');
+  }
+
+  if (flowType === FlowType.OPENING) {
+    return [
+      base,
+      '你现在处于【Normal/故事开幕】阶段。',
+      `开幕输出格式要求：${rulesets.opening_format}`,
+      '开幕后不需要A/B/C/D选项；系统会提供“接收任务”按钮进入主循环。',
+      stateBlock,
+    ].join('\n\n');
+  }
+
+  if (flowType === FlowType.CHECK_REQUEST) {
+    return [
+      base,
+      '你现在处于【Checking】阶段：你只负责判断“用户行为是否需要检定，以及用什么骰子”。',
+      '非常重要：你必须严格遵守输出格式，否则系统无法解析。',
+      `输出格式：\n${rulesets.check_format}`,
+      stateBlock,
+      '现在用户的行为是：',
+      userText,
+    ].join('\n\n');
+  }
+
+  // NORMAL_TURN
+  const checkBlock = checkResult
+    ? `【系统检定结果（事实）】\n${json(checkResult)}`
+    : '';
 
   return [
     base,
-    modeRule,
-    `【当前世界状态】\n${worldBlock}`,
-    instruction,
-    optionFormat,
+    `你现在处于【Normal/${mode === 'meta' ? 'Meta' : 'Playing'}】阶段。`,
+    '请推进剧情，并在结尾提供A/B/C/D四个选项（D为自由活动）。',
+    rulesets.normal_output_format,
+    stateBlock,
+    checkBlock,
+    '用户本回合提交的行动/输入：',
+    userText,
+    '',
+    '输出要求：',
+    '1) 先叙事正文',
+    '2) 结尾必须严格四行选项：',
+    'A. ...',
+    'B. ...',
+    'C. ...',
+    'D. 自由活动：...',
   ]
     .filter(Boolean)
     .join('\n\n');
