@@ -1,4 +1,5 @@
-import { runTurn, runSimpleChat } from "../engine/gameEngine.js";
+import { runNarrative } from "../engine/narrativeEngine.js";
+import { FlowType, Phase } from "../engine/flows.js";
 import {
   updateSession,
   listSessions,
@@ -21,18 +22,44 @@ export function renderApp({ sessionId, session }) {
           </label>
         </div>
 
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <label style="display:flex;gap:6px;align-items:center;">
             <input type="radio" name="chatMode" value="simple" checked />
             <span>纯聊天（无记忆）</span>
           </label>
           <label style="display:flex;gap:6px;align-items:center;">
             <input type="radio" name="chatMode" value="game" />
-            <span>游戏（结构化JSON）</span>
+            <span>游戏（结构化JSON，legacy）</span>
           </label>
 
           <label style="margin-left:auto;display:flex;gap:6px;align-items:center;">
-            <input id="enforceOptionsToggle" type="checkbox" />
+            <input id="flowToggle" type="checkbox" checked />
+            <span>启用叙事Flow</span>
+          </label>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <span style="font-size:12px;color:#666;">Phase:</span>
+          <select id="phaseSelect">
+            <option value="${Phase.setup_world}">setup_world</option>
+            <option value="${Phase.setup_pc}">setup_pc</option>
+            <option value="${Phase.opening}">opening</option>
+            <option value="${Phase.playing}">playing</option>
+            <option value="${Phase.checking}">checking</option>
+          </select>
+
+          <span style="font-size:12px;color:#666;">FlowType:</span>
+          <select id="flowTypeSelect">
+            <option value="">(auto)</option>
+            <option value="${FlowType.WORLD_GEN}">WORLD_GEN</option>
+            <option value="${FlowType.PC_GEN}">PC_GEN</option>
+            <option value="${FlowType.OPENING}">OPENING</option>
+            <option value="${FlowType.CHECK_REQUEST}">CHECK_REQUEST</option>
+            <option value="${FlowType.NORMAL_TURN}">NORMAL_TURN</option>
+          </select>
+
+          <label style="display:flex;gap:6px;align-items:center;">
+            <input id="enforceOptionsToggle" type="checkbox" checked />
             <span>固定选项(A/B/C/D)</span>
           </label>
         </div>
@@ -48,7 +75,7 @@ export function renderApp({ sessionId, session }) {
         </div>
 
         <details>
-          <summary>纯聊天设置（可选 System Prompt）</summary>
+          <summary>System Prompt（可选）</summary>
           <textarea id="systemPromptInput" rows="4" style="width:100%;box-sizing:border-box;" placeholder="例如：你是一个TRPG主持人(KP)，请用中文主持一个克苏鲁短剧本。"></textarea>
         </details>
 
@@ -63,8 +90,8 @@ export function renderApp({ sessionId, session }) {
       </div>
 
       <div style="padding:12px;display:flex;flex-direction:column;gap:8px;">
-        <h3 style="margin:0;">状态面板</h3>
-        <div style="font-size:12px;color:#666;">（游戏模式使用；纯聊天模式可忽略）</div>
+        <h3 style="margin:0;">特殊数据库（WorldState）</h3>
+        <div style="font-size:12px;color:#666;">（Meta 模式可编辑。点击保存写入存档。）</div>
         <div id="stateView" style="white-space:pre-wrap;background:#f6f6f6;border:1px solid #eee;border-radius:8px;padding:8px;flex:1;overflow:auto;" contenteditable="true"></div>
         <button id="saveStateBtn">保存右侧修改（Meta 模式）</button>
       </div>
@@ -77,6 +104,9 @@ export function renderApp({ sessionId, session }) {
     textInput: app.querySelector("#textInput"),
     sendBtn: app.querySelector("#sendBtn"),
     metaToggle: app.querySelector("#metaToggle"),
+    flowToggle: app.querySelector('#flowToggle'),
+    phaseSelect: app.querySelector('#phaseSelect'),
+    flowTypeSelect: app.querySelector('#flowTypeSelect'),
     enforceOptionsToggle: app.querySelector('#enforceOptionsToggle'),
     stateView: app.querySelector("#stateView"),
     saveStateBtn: app.querySelector("#saveStateBtn"),
@@ -94,8 +124,13 @@ export function renderApp({ sessionId, session }) {
   el.apiKeyInput.value = localStorage.getItem("ai_trpg_api_key") || "";
   el.providerSelect.value = localStorage.getItem("ai_trpg_provider") || "mock";
   el.modelInput.value = localStorage.getItem("ai_trpg_model") || "deepseek-v4-flash";
-  el.systemPromptInput.value = localStorage.getItem('ai_trpg_simple_system_prompt') || '';
-  el.enforceOptionsToggle.checked = localStorage.getItem('ai_trpg_enforce_options') === 'true';
+  el.systemPromptInput.value = localStorage.getItem('ai_trpg_system_prompt') || '';
+  el.flowToggle.checked = localStorage.getItem('ai_trpg_flow_enabled') !== 'false';
+  el.enforceOptionsToggle.checked = localStorage.getItem('ai_trpg_enforce_options') !== 'false';
+
+  // session phase/mode
+  session.phase = session.phase || Phase.setup_world;
+  el.phaseSelect.value = session.phase;
 
   function getChatMode() {
     const picked = chatModeEls.find((x) => x.checked);
@@ -115,8 +150,9 @@ export function renderApp({ sessionId, session }) {
       .map((m) => {
         const bg = m.role === "user" ? "#dff2ff" : "#fff";
         const modeTag = m.mode ? ` · ${escapeHtml(m.mode)}` : "";
+        const phaseTag = m.phase ? ` · ${escapeHtml(m.phase)}` : "";
         return `<div style="margin:6px 0;padding:8px;border-radius:8px;background:${bg};border:1px solid #eee;">
-        <div style="font-size:12px;color:#666;">${escapeHtml(m.role)}${modeTag}</div>
+        <div style="font-size:12px;color:#666;">${escapeHtml(m.role)}${modeTag}${phaseTag}</div>
         <div>${escapeHtml(m.content).replaceAll("\n", "<br/>")}</div>
       </div>`;
       })
@@ -132,16 +168,11 @@ export function renderApp({ sessionId, session }) {
     el.options.innerHTML = "";
     for (const o of opts) {
       const btn = document.createElement("button");
-      // o can be string (game mode) or {key,text}
       const label = typeof o === 'string' ? o : `${o.key}. ${o.text}`;
       btn.textContent = label;
       btn.onclick = () => {
-        if (typeof o === 'string') {
-          submit(o);
-        } else {
-          // Send option text as next user message
-          submit(o.text);
-        }
+        if (typeof o === 'string') submit(o);
+        else submit(o.text);
       };
       el.options.appendChild(btn);
     }
@@ -151,56 +182,72 @@ export function renderApp({ sessionId, session }) {
     const mode = el.metaToggle.checked ? "meta" : "normal";
     const provider = el.providerSelect.value;
     const chatMode = getChatMode();
+    const flowEnabled = el.flowToggle.checked;
+    const phase = el.phaseSelect.value;
+    const selectedFlowType = el.flowTypeSelect.value || null;
 
-    session.messages.push({ role: "user", content: text, mode });
+    // user message
+    session.messages.push({ role: "user", content: text, mode, phase });
     updateSession(sessionId, (s) => Object.assign(s, session));
     renderChat();
 
     try {
       const apiKey = el.apiKeyInput.value.trim();
       const model = el.modelInput.value.trim();
+      const systemPrompt = el.systemPromptInput.value;
 
-      if (chatMode === "simple") {
-        const systemPrompt = el.systemPromptInput.value;
-        const enforceOptions = el.enforceOptionsToggle.checked;
-
-        const result = await runSimpleChat({
+      if (chatMode === "game") {
+        // legacy
+        const result = await runNarrative({
+          session,
           provider,
           apiKey,
           model,
-          systemPrompt,
+          mode,
+          phase,
           userText: text,
-          enforceOptions,
+          systemPrompt,
+          flowEnabled: false,
+          selectedFlowType: null,
         });
 
-        session.messages.push({ role: "assistant", content: result.text, mode });
+        session.messages.push({ role: "assistant", content: result.text, mode, phase });
         updateSession(sessionId, (s) => Object.assign(s, session));
         renderChat();
-        renderOptions(result.options || []);
+        renderState();
+        renderOptions([]);
         return;
       }
 
-      // game mode
-      const result = await runTurn({
-        mode,
+      // simple chat with flow
+      const enforceOptions = el.enforceOptionsToggle.checked;
+      const result = await runNarrative({
         session,
-        userText: text,
         provider,
         apiKey,
         model,
+        mode,
+        phase,
+        userText: text,
+        systemPrompt,
+        flowEnabled,
+        selectedFlowType,
       });
 
-      session.messages.push({ role: "assistant", content: result.narrative, mode });
-      updateSession(sessionId, (s) => Object.assign(s, session));
+      session.messages.push({ role: "assistant", content: result.text, mode, phase: result.next?.phase || phase });
+      session.phase = result.next?.phase || phase;
+      el.phaseSelect.value = session.phase;
 
+      updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
       renderState();
-      renderOptions(result.options || []);
+      renderOptions(enforceOptions ? (result.options || []) : []);
     } catch (e) {
       session.messages.push({
         role: "assistant",
         content: `【错误】${e.message}`,
         mode,
+        phase,
       });
       updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
@@ -220,7 +267,6 @@ export function renderApp({ sessionId, session }) {
 
   el.providerSelect.onchange = () => {
     localStorage.setItem("ai_trpg_provider", el.providerSelect.value);
-    // convenience defaults
     if (
       el.providerSelect.value === "deepseek" &&
       (!el.modelInput.value || el.modelInput.value.startsWith("gpt-"))
@@ -235,20 +281,23 @@ export function renderApp({ sessionId, session }) {
     }
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
   };
+
   el.apiKeyInput.oninput = () =>
     localStorage.setItem("ai_trpg_api_key", el.apiKeyInput.value);
   el.modelInput.oninput = () =>
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
   el.systemPromptInput.oninput = () =>
-    localStorage.setItem(
-      "ai_trpg_simple_system_prompt",
-      el.systemPromptInput.value
-    );
+    localStorage.setItem('ai_trpg_system_prompt', el.systemPromptInput.value);
+
+  el.flowToggle.onchange = () =>
+    localStorage.setItem('ai_trpg_flow_enabled', String(el.flowToggle.checked));
   el.enforceOptionsToggle.onchange = () =>
-    localStorage.setItem(
-      'ai_trpg_enforce_options',
-      String(el.enforceOptionsToggle.checked)
-    );
+    localStorage.setItem('ai_trpg_enforce_options', String(el.enforceOptionsToggle.checked));
+
+  el.phaseSelect.onchange = () => {
+    session.phase = el.phaseSelect.value;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+  };
 
   el.saveStateBtn.onclick = () => {
     if (!el.metaToggle.checked) {

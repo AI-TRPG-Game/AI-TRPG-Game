@@ -26,19 +26,26 @@ Browser-side keys cannot be fully protected.
 - Do **NOT** deploy this build publicly with a real key.
 - For real deployment, move provider calls to a backend proxy (Option B) and store API keys in server environment variables.
 
-## Mode
-- **纯聊天（无记忆）**: calls the provider with only (optional) system prompt + latest user message.
-- **游戏（结构化JSON）**: keeps the structured JSON loop.
+## Modes
 
-## New: Simple options format (A/B/C/D)
-In **纯聊天（无记忆）** mode you can enable **“固定选项(A/B/C/D)”**.
+### 纯聊天（无记忆）
+Calls the provider with only (optional) system prompt + latest user message.
 
-- The model is instructed to **end every reply** with 4 options:
-  - `A. ...`
-  - `B. ...`
-  - `C. ...`
-  - `D. 自由活动：...` (D must be “自由活动”)
-- The UI parses these options and renders them as buttons.
-- Clicking a button automatically sends that option text back to the model as the next user message.
+### 游戏（结构化JSON）
+Keeps the older structured JSON loop (legacy).
 
-This is a lightweight “format enforcement” step before moving to full JSON schemas.
+## New: Narrative flows (engineering scaffold)
+This branch adds a **flow-based** orchestrator scaffold aligned with the product docs:
+
+Flow types:
+- `WORLD_GEN` (Meta)
+- `PC_GEN` (Meta)
+- `OPENING` (Normal)
+- `CHECK_REQUEST` (Normal)
+- `NORMAL_TURN` (Normal)
+
+We currently implement a lightweight output format:
+- Narrative text followed by A/B/C/D options where D must be `自由活动：...`
+- The UI renders options as buttons. Clicking sends the option text as next input.
+
+This is a stepping stone before moving to full JSON schema outputs.

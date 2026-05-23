@@ -35,14 +35,18 @@ export function createSession() {
     createdAt: nowIso(),
     updatedAt: nowIso(),
     mode: "normal", // normal | meta
+    phase: "setup_world",
     messages: [],
     summary: "",
     state: {
-      world: "默认世界观：小镇与一座废弃教堂。",
-      quest: "当前任务：调查教堂的怪声。",
-      character: { name: "调查员", hp: 10, san: 10 },
+      world_background: "默认世界观：小镇与一座废弃教堂。",
+      quest_core: "核心任务：调查教堂的怪声。",
+      quest_current: "当前任务：前往教堂入口并寻找线索。",
+      pc: { name: "调查员", hp: 10, san: 10 },
+      npcs: [],
       inventory: [],
       diceLog: [],
+      lastRoll: null,
     },
   };
 
