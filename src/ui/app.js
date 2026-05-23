@@ -30,6 +30,11 @@ export function renderApp({ sessionId, session }) {
             <input type="radio" name="chatMode" value="game" />
             <span>游戏（结构化JSON）</span>
           </label>
+
+          <label style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <input id="enforceOptionsToggle" type="checkbox" />
+            <span>固定选项(A/B/C/D)</span>
+          </label>
         </div>
 
         <div style="display:flex;gap:8px;">
@@ -72,6 +77,7 @@ export function renderApp({ sessionId, session }) {
     textInput: app.querySelector("#textInput"),
     sendBtn: app.querySelector("#sendBtn"),
     metaToggle: app.querySelector("#metaToggle"),
+    enforceOptionsToggle: app.querySelector('#enforceOptionsToggle'),
     stateView: app.querySelector("#stateView"),
     saveStateBtn: app.querySelector("#saveStateBtn"),
     providerSelect: app.querySelector("#providerSelect"),
@@ -89,10 +95,11 @@ export function renderApp({ sessionId, session }) {
   el.providerSelect.value = localStorage.getItem("ai_trpg_provider") || "mock";
   el.modelInput.value = localStorage.getItem("ai_trpg_model") || "deepseek-v4-flash";
   el.systemPromptInput.value = localStorage.getItem('ai_trpg_simple_system_prompt') || '';
+  el.enforceOptionsToggle.checked = localStorage.getItem('ai_trpg_enforce_options') === 'true';
 
   function getChatMode() {
-    const picked = chatModeEls.find(x => x.checked);
-    return picked?.value || 'simple';
+    const picked = chatModeEls.find((x) => x.checked);
+    return picked?.value || "simple";
   }
 
   function renderSessionList(currentId) {
@@ -107,7 +114,7 @@ export function renderApp({ sessionId, session }) {
     el.chat.innerHTML = session.messages
       .map((m) => {
         const bg = m.role === "user" ? "#dff2ff" : "#fff";
-        const modeTag = m.mode ? ` · ${escapeHtml(m.mode)}` : '';
+        const modeTag = m.mode ? ` · ${escapeHtml(m.mode)}` : "";
         return `<div style="margin:6px 0;padding:8px;border-radius:8px;background:${bg};border:1px solid #eee;">
         <div style="font-size:12px;color:#666;">${escapeHtml(m.role)}${modeTag}</div>
         <div>${escapeHtml(m.content).replaceAll("\n", "<br/>")}</div>
@@ -125,8 +132,17 @@ export function renderApp({ sessionId, session }) {
     el.options.innerHTML = "";
     for (const o of opts) {
       const btn = document.createElement("button");
-      btn.textContent = o;
-      btn.onclick = () => submit(o);
+      // o can be string (game mode) or {key,text}
+      const label = typeof o === 'string' ? o : `${o.key}. ${o.text}`;
+      btn.textContent = label;
+      btn.onclick = () => {
+        if (typeof o === 'string') {
+          submit(o);
+        } else {
+          // Send option text as next user message
+          submit(o.text);
+        }
+      };
       el.options.appendChild(btn);
     }
   }
@@ -144,13 +160,23 @@ export function renderApp({ sessionId, session }) {
       const apiKey = el.apiKeyInput.value.trim();
       const model = el.modelInput.value.trim();
 
-      if (chatMode === 'simple') {
+      if (chatMode === "simple") {
         const systemPrompt = el.systemPromptInput.value;
-        const result = await runSimpleChat({ provider, apiKey, model, systemPrompt, userText: text });
-        session.messages.push({ role: 'assistant', content: result.text, mode });
+        const enforceOptions = el.enforceOptionsToggle.checked;
+
+        const result = await runSimpleChat({
+          provider,
+          apiKey,
+          model,
+          systemPrompt,
+          userText: text,
+          enforceOptions,
+        });
+
+        session.messages.push({ role: "assistant", content: result.text, mode });
         updateSession(sessionId, (s) => Object.assign(s, session));
         renderChat();
-        renderOptions([]);
+        renderOptions(result.options || []);
         return;
       }
 
@@ -171,7 +197,11 @@ export function renderApp({ sessionId, session }) {
       renderState();
       renderOptions(result.options || []);
     } catch (e) {
-      session.messages.push({ role: "assistant", content: `【错误】${e.message}`, mode });
+      session.messages.push({
+        role: "assistant",
+        content: `【错误】${e.message}`,
+        mode,
+      });
       updateSession(sessionId, (s) => Object.assign(s, session));
       renderChat();
     }
@@ -191,11 +221,17 @@ export function renderApp({ sessionId, session }) {
   el.providerSelect.onchange = () => {
     localStorage.setItem("ai_trpg_provider", el.providerSelect.value);
     // convenience defaults
-    if (el.providerSelect.value === 'deepseek' && (!el.modelInput.value || el.modelInput.value.startsWith('gpt-'))) {
-      el.modelInput.value = 'deepseek-v4-flash';
+    if (
+      el.providerSelect.value === "deepseek" &&
+      (!el.modelInput.value || el.modelInput.value.startsWith("gpt-"))
+    ) {
+      el.modelInput.value = "deepseek-v4-flash";
     }
-    if (el.providerSelect.value === 'openai' && (!el.modelInput.value || el.modelInput.value.startsWith('deepseek-'))) {
-      el.modelInput.value = 'gpt-4.1-mini';
+    if (
+      el.providerSelect.value === "openai" &&
+      (!el.modelInput.value || el.modelInput.value.startsWith("deepseek-"))
+    ) {
+      el.modelInput.value = "gpt-4.1-mini";
     }
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
   };
@@ -204,7 +240,15 @@ export function renderApp({ sessionId, session }) {
   el.modelInput.oninput = () =>
     localStorage.setItem("ai_trpg_model", el.modelInput.value);
   el.systemPromptInput.oninput = () =>
-    localStorage.setItem('ai_trpg_simple_system_prompt', el.systemPromptInput.value);
+    localStorage.setItem(
+      "ai_trpg_simple_system_prompt",
+      el.systemPromptInput.value
+    );
+  el.enforceOptionsToggle.onchange = () =>
+    localStorage.setItem(
+      'ai_trpg_enforce_options',
+      String(el.enforceOptionsToggle.checked)
+    );
 
   el.saveStateBtn.onclick = () => {
     if (!el.metaToggle.checked) {
