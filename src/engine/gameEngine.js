@@ -2,6 +2,7 @@ import { roll } from "./dice.js";
 import { tryParseJson } from "../llm/validator.js";
 import { buildMessages } from "../llm/promptBuilder.js";
 import * as Mock from "../llm/providers/mockProvider.js";
+import * as OpenRouter from "../llm/providers/openrouterProvider.js";
 import * as OpenAICompat from "../llm/providers/openaiProvider.js";
 import { runSimpleChatWithOptions } from "./simpleOptions.js";
 
@@ -20,7 +21,8 @@ export async function runTurn({
   mode,
   session,
   userText,
-  provider, // "mock" | "openai" | "deepseek"
+
+  provider, // "mock" | "openai" | "deepseek" | "openrouter"
   apiKey,
   model,
 }) {
@@ -34,12 +36,19 @@ export async function runTurn({
       throw new Error(`${PROVIDER_CONFIG[provider].label} provider selected but API key is empty.`);
     }
     const messages = buildMessages({ mode, state, userText, lastRoll });
+
     raw = await OpenAICompat.generate({
       baseUrl: PROVIDER_CONFIG[provider].baseUrl,
       apiKey,
       model,
       messages,
     });
+  } else if (provider === "openrouter") {
+    if (!apiKey) {
+      throw new Error("OpenRouter provider selected but API key is empty.");
+    }
+    const messages = buildMessages({ mode, state, userText, lastRoll });
+    raw = await OpenRouter.generate({ apiKey, model, messages });
   } else {
     raw = await Mock.generate({ mode, state, userText });
   }
@@ -111,6 +120,18 @@ export async function runSimpleChat({
       systemPrompt,
       userText,
     });
+    return { text, options: [] };
+  }
+
+  if (provider === 'openrouter') {
+    if (!apiKey) {
+      throw new Error("OpenRouter provider selected but API key is empty.");
+    }
+    const messages = [];
+    if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+    messages.push({ role: 'user', content: userText });
+
+    const text = await OpenRouter.generate({ apiKey, model, messages });
     return { text, options: [] };
   }
 

@@ -3,6 +3,7 @@ import { buildFlowPrompt } from './inputAssembler.js';
 import { roll } from './dice.js';
 import { parseABCDOptions, parseCheckDecision } from './simpleOptions.js';
 import { generateSimpleChat } from '../llm/providers/openaiProvider.js';
+import { generate as generateOpenRouter } from '../llm/providers/openrouterProvider.js';
 
 const PROVIDER_CONFIG = {
   openai: {
@@ -20,7 +21,16 @@ function getProviderConf(provider) {
   return null;
 }
 
-async function generateWithProvider({ conf, apiKey, model, systemPrompt, userText }) {
+async function generateWithProvider({ provider, conf, apiKey, model, systemPrompt, userText }) {
+  if (provider === 'openrouter') {
+    const messages = [];
+    if (systemPrompt && systemPrompt.trim()) {
+      messages.push({ role: 'system', content: systemPrompt.trim() });
+    }
+    messages.push({ role: 'user', content: userText });
+    return generateOpenRouter({ apiKey, model, messages });
+  }
+
   return generateSimpleChat({
     baseUrl: conf.baseUrl,
     apiKey,
@@ -64,8 +74,11 @@ export async function runFlowTurn({
   }
 
   const conf = getProviderConf(provider);
-  if (!conf) throw new Error('Unknown provider');
-  if (!apiKey) throw new Error(`${conf.label} provider selected but API key is empty.`);
+  if (!conf && provider !== 'openrouter') throw new Error('Unknown provider');
+  if (!apiKey) {
+    const label = conf?.label || 'OpenRouter';
+    throw new Error(`${label} provider selected but API key is empty.`);
+  }
 
   const worldState = session.state;
 
@@ -77,8 +90,10 @@ export async function runFlowTurn({
       userText: ut,
       systemPrompt,
       checkResult,
+      contextSummary: session.summary || '',
+      recentMessages: (session.messages || []).slice(-6),
     });
-    return generateWithProvider({ conf, apiKey, model, systemPrompt: sys, userText: ut });
+    return generateWithProvider({ provider, conf, apiKey, model, systemPrompt: sys, userText: ut });
   }
 
   // --------- Main flow handling ---------

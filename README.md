@@ -1,4 +1,3 @@
-```
 # AI-TRPG-Game (MVP)
 
 这是一个 **AI + TRPG** 的前端 MVP：
@@ -13,8 +12,8 @@ npm run dev
 ```
 
 打开页面后：
-- 选择 Provider（Mock / DeepSeek / OpenAI）
-- 若选择 DeepSeek/OpenAI，需要输入 API Key（仅本地 BYOK 测试，不安全）
+- 选择 Provider（Mock / DeepSeek / OpenAI / OpenRouter）
+- 若选择 DeepSeek/OpenAI/OpenRouter，需要输入 API Key（仅本地 BYOK 测试，不安全）
 
 ## 核心交互（对齐设计文档）
 
@@ -42,6 +41,8 @@ npm run dev
 2. 若需要：系统本地掷骰并把结果作为事实加入下一次叙事输入
 3. 再请求模型生成最终叙事 + A/B/C/D 选项
 
+补充：点击“接收任务”会直接自动提交一次回合。
+
 ### 5) 主角设定：schema + 一键存档
 在 setup_pc 阶段，系统要求模型严格输出以下字段（逐项一行）：
 - 姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余
@@ -61,6 +62,20 @@ npm run dev
 - **只有点击“角色存档”才会写入 WorldState 的 `npcs[]`**
 - 若姓名重复：会追加编号（如 `张三#2`）
 
+### 7) 物品与任务（提议→确认）
+模型在 normal 输出里可以额外给出：
+
+```
+重要物品：
+- 名称 | 描述
+- ...
+
+任务更新：
+新的任务描述
+```
+
+系统会把它们解析为“待存档物品”和“任务更新建议”，只有在 UI 中确认后才会写入 `inventory[]` 或 `quest_current`。
+
 ## WorldState（特殊数据库）
 右侧面板是“权威设定源”，用于让 AI 长期保持一致：
 - world_background
@@ -71,8 +86,7 @@ npm run dev
 - rulesets
 - diceLog / lastRoll
 
-建议只在 **Meta** 模式下直接编辑右侧 JSON，并点击保存。
+建议只在 **Meta** 模式下直接编辑右侧 JSON，并点击保存（保存后会自动提交一次回合）。
 
 ## 说明
 - 该 MVP 仍是纯前端，API Key 无法安全保存；部署版本应迁移到后端代理。
-```
