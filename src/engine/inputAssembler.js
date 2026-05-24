@@ -8,7 +8,7 @@ const DEFAULT_RULESETS = {
   opening_format:
     '输出：开幕自然叙述（氛围+地点+现状）\n再用自然语言回顾主角设定并衔接背景\n最后给出核心任务/钩子。',
   normal_output_format:
-    '输出：\n1) 正常叙述推进\n2) 如果出现重要NPC，请加一个“重要人物：”段落（放在选项之前），格式为：\n   重要人物：\n   - 姓名 | 与主角关系 | 详细描述\n   - ...\n3) 结尾必须给四个选项：A/B/C/D。D 必须以“自由活动：”开头。',
+    '输出：\n1) 正常叙述推进\n2) 如果出现重要NPC，请加一个“重要人物：”段落（放在选项之前），格式为：\n   重要人物：\n   - 姓名 | 与主角关系 | 详细描述\n   - ...\n3) 如果出现重要物品，请加一个“重要物品：”段落（放在选项之前），格式为：\n   重要物品：\n   - 名称 | 描述\n   - ...\n4) 如需更新当前任务，请加一个“任务更新：”段落（放在选项之前），下一行写任务描述\n5) 结尾必须给四个选项：A/B/C/D。D 必须以“自由活动：”开头。',
   check_format:
     '只输出三行：\nneeds_check: yes|no\ndice: d20|d100\nreason: <一句话原因>\n不要输出其它文字。',
 };
@@ -28,6 +28,8 @@ export function buildFlowPrompt({
   userText,
   systemPrompt,
   checkResult,
+  contextSummary,
+  recentMessages,
 }) {
   const rulesets = worldState?.rulesets || DEFAULT_RULESETS;
 
@@ -53,12 +55,27 @@ export function buildFlowPrompt({
     }),
   ].join('\n');
 
+  const contextLines = [];
+  if (contextSummary && contextSummary.trim()) {
+    contextLines.push('【长期摘要】');
+    contextLines.push(contextSummary.trim());
+  }
+  if (Array.isArray(recentMessages) && recentMessages.length) {
+    contextLines.push('【近期对话】');
+    for (const m of recentMessages) {
+      if (!m || !m.role || !m.content) continue;
+      contextLines.push(`${m.role}: ${String(m.content).trim()}`);
+    }
+  }
+  const contextBlock = contextLines.length ? contextLines.join('\n') : '';
+
   if (flowType === FlowType.WORLD_GEN) {
     return [
       base,
       '你现在处于【Meta/世界观设定】阶段。',
       '目标：根据用户关键词生成“世界观与背景”的可编辑文本。',
       '不要推进剧情，不要掷骰，不要输出A/B/C/D。',
+      contextBlock,
       stateBlock,
       '请输出：\n- 世界观与背景（分段）\n- 3条可选的进一步追问/补充方向（用项目符号）',
     ].join('\n\n');
@@ -71,6 +88,7 @@ export function buildFlowPrompt({
       '目标：根据世界观与用户输入生成主角卡。',
       `主角卡必须严格按以下 schema 输出：${rulesets.pc_card_format}`,
       '输出时不要夹杂额外段落、不要使用项目符号、不要输出A/B/C/D。',
+      contextBlock,
       stateBlock,
       '请只输出主角卡内容（严格逐项）。',
     ].join('\n\n');
@@ -82,6 +100,7 @@ export function buildFlowPrompt({
       '你现在处于【Normal/故事开幕】阶段。',
       `开幕输出格式要求：${rulesets.opening_format}`,
       '开幕后不需要A/B/C/D选项；系统会提供“接收任务”按钮进入主循环。',
+      contextBlock,
       stateBlock,
     ].join('\n\n');
   }
@@ -92,6 +111,7 @@ export function buildFlowPrompt({
       '你现在处于【Checking】阶段：你只负责判断“用户行为是否需要检定，以及用什么骰子”。',
       '非常重要：你必须严格遵守输出格式，否则系统无法解析。',
       `输出格式：\n${rulesets.check_format}`,
+      contextBlock,
       stateBlock,
       '现在用户的行为是：',
       userText,
@@ -108,6 +128,7 @@ export function buildFlowPrompt({
     '请推进剧情，并在结尾提供A/B/C/D四个选项（D为自由活动）。',
     rulesets.normal_output_format,
     `重要人物卡格式：${rulesets.npc_card_format}`,
+    contextBlock,
     stateBlock,
     checkBlock,
     '用户本回合提交的行动/输入：',

@@ -1,3 +1,5 @@
+import { generateSimpleChat } from "../llm/providers/openaiProvider.js";
+
 // Parsing helpers for the “A/B/C/D options” transitional format
 // and a minimal check-decision format.
 
@@ -42,6 +44,41 @@ export function parseABCDOptions(text) {
   }
 
   return { narrative, options };
+}
+
+/**
+ * Enforce A/B/C/D options for simple chat.
+ */
+export async function runSimpleChatWithOptions({
+  baseUrl,
+  apiKey,
+  model,
+  systemPrompt,
+  userText,
+}) {
+  const enforce =
+    '请在回复末尾严格给出四行选项：\n' +
+    'A. ...\n' +
+    'B. ...\n' +
+    'C. ...\n' +
+    'D. 自由活动：...\n' +
+    '不要输出多余解释、不要输出 Markdown 代码块。';
+
+  const mergedSystem = [systemPrompt, enforce].filter(Boolean).join('\n\n');
+  const raw = await generateSimpleChat({
+    baseUrl,
+    apiKey,
+    model,
+    systemPrompt: mergedSystem,
+    userText,
+  });
+
+  const parsed = parseABCDOptions(raw);
+  return {
+    text: parsed?.narrative || raw,
+    options: parsed?.options || [],
+    raw,
+  };
 }
 
 /**
@@ -99,4 +136,51 @@ export function parseNpcProposals(text) {
     out.push({ name: name || '(未命名)', relation, description });
   }
   return out;
+}
+
+/**
+ * Parse item proposals from a tagged text section.
+ * Format:
+ *
+ *  重要物品：
+ * - 名称 | 描述
+ * - 名称
+ */
+export function parseItemProposals(text) {
+  if (!text || typeof text !== 'string') return [];
+  const m = /(^|\n)重要物品：\s*\n([\s\S]*?)(\n\s*\n|\nA\.|$)/.exec(text);
+  if (!m) return [];
+
+  const block = m[2] || '';
+  const lines = block
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const out = [];
+  for (const l of lines) {
+    if (!l.startsWith('-')) continue;
+    const body = l.replace(/^\-\s*/, '').trim();
+    const parts = body.split('|').map((x) => x.trim());
+    const name = parts[0] || '';
+    const description = parts.slice(1).join(' | ').trim();
+    if (!name && !description) continue;
+    out.push({ name: name || '(未命名物品)', description });
+  }
+  return out;
+}
+
+/**
+ * Parse a quest update line.
+ * Format:
+ *
+ *  任务更新：
+ *  <一行任务描述>
+ */
+export function parseQuestUpdate(text) {
+  if (!text || typeof text !== 'string') return null;
+  const m = /(^|\n)任务更新：\s*\n([^\n]+)\s*/.exec(text);
+  if (!m) return null;
+  const value = (m[2] || '').trim();
+  return value || null;
 }

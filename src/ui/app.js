@@ -1,6 +1,10 @@
 import { runNarrative } from '../engine/narrativeEngine.js';
 import { FlowType, Phase } from '../engine/flows.js';
-import { parseNpcProposals } from '../engine/simpleOptions.js';
+import {
+  parseNpcProposals,
+  parseItemProposals,
+  parseQuestUpdate,
+} from '../engine/simpleOptions.js';
 import {
   updateSession,
   listSessions,
@@ -129,6 +133,10 @@ export function renderApp({ sessionId, session }) {
 
         <div id="npcProposals" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
 
+        <div id="itemProposals" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
+
+        <div id="questProposal" style="display:none;border:1px solid #eee;background:#fff;border-radius:8px;padding:8px;"></div>
+
         <div style="display:flex;gap:8px;">
           <input id="textInput" style="flex:1;padding:10px;border-radius:8px;border:1px solid #ddd;" placeholder="输入你的行动或问题..." />
           <button id="sendBtn">发送</button>
@@ -149,6 +157,8 @@ export function renderApp({ sessionId, session }) {
     options: app.querySelector('#options'),
     pcDraft: app.querySelector('#pcDraft'),
     npcProposals: app.querySelector('#npcProposals'),
+    itemProposals: app.querySelector('#itemProposals'),
+    questProposal: app.querySelector('#questProposal'),
     textInput: app.querySelector('#textInput'),
     sendBtn: app.querySelector('#sendBtn'),
     metaToggle: app.querySelector('#metaToggle'),
@@ -175,6 +185,8 @@ export function renderApp({ sessionId, session }) {
 
   // UI-only state: pending proposals require explicit user save
   let pendingNpcs = [];
+  let pendingItems = [];
+  let pendingQuest = null;
   let pendingPc = null;
 
   // persist settings
@@ -353,6 +365,98 @@ export function renderApp({ sessionId, session }) {
     el.npcProposals.appendChild(clearBtn);
   }
 
+  function renderItemProposals() {
+    if (!pendingItems.length) {
+      el.itemProposals.style.display = 'none';
+      el.itemProposals.innerHTML = '';
+      return;
+    }
+
+    el.itemProposals.style.display = 'block';
+    el.itemProposals.innerHTML = `<div style="font-weight:600;margin-bottom:6px;">待存档物品（需要你确认）</div>`;
+
+    pendingItems.forEach((item, idx) => {
+      const wrap = document.createElement('div');
+      wrap.style.borderTop = '1px solid #eee';
+      wrap.style.paddingTop = '6px';
+      wrap.style.marginTop = '6px';
+
+      const name = item.name || '(未命名物品)';
+      const desc = item.description || '';
+
+      wrap.innerHTML = `
+        <div><b>${escapeHtml(name)}</b></div>
+        <div style="font-size:12px;color:#555;white-space:pre-wrap;">${escapeHtml(desc)}</div>
+      `;
+
+      const btn = document.createElement('button');
+      btn.textContent = '物品存档';
+      btn.onclick = () => {
+        session.state.inventory = session.state.inventory || [];
+        session.state.inventory.push({
+          name,
+          description: desc,
+          at: new Date().toISOString(),
+        });
+
+        pendingItems.splice(idx, 1);
+        updateSession(sessionId, (s) => Object.assign(s, session));
+        renderState();
+        renderItemProposals();
+      };
+
+      wrap.appendChild(btn);
+      el.itemProposals.appendChild(wrap);
+    });
+
+    const clearBtn = document.createElement('button');
+    clearBtn.textContent = '清空待存档';
+    clearBtn.style.marginTop = '8px';
+    clearBtn.onclick = () => {
+      pendingItems = [];
+      renderItemProposals();
+    };
+    el.itemProposals.appendChild(clearBtn);
+  }
+
+  function renderQuestProposal() {
+    if (!pendingQuest) {
+      el.questProposal.style.display = 'none';
+      el.questProposal.innerHTML = '';
+      return;
+    }
+
+    el.questProposal.style.display = 'block';
+    el.questProposal.innerHTML = `<div style="font-weight:600;margin-bottom:6px;">任务更新建议（需要你确认）</div>`;
+
+    const text = document.createElement('div');
+    text.style.whiteSpace = 'pre-wrap';
+    text.style.marginBottom = '8px';
+    text.textContent = pendingQuest;
+    el.questProposal.appendChild(text);
+
+    const btnApply = document.createElement('button');
+    btnApply.textContent = '更新当前任务';
+    btnApply.onclick = () => {
+      session.state.quest_current = pendingQuest;
+      pendingQuest = null;
+      updateSession(sessionId, (s) => Object.assign(s, session));
+      renderState();
+      renderQuestProposal();
+    };
+
+    const btnClear = document.createElement('button');
+    btnClear.textContent = '忽略';
+    btnClear.style.marginLeft = '8px';
+    btnClear.onclick = () => {
+      pendingQuest = null;
+      renderQuestProposal();
+    };
+
+    el.questProposal.appendChild(btnApply);
+    el.questProposal.appendChild(btnClear);
+  }
+
   async function submit(text) {
     const mode = el.metaToggle.checked ? 'meta' : 'normal';
     const provider = el.providerSelect.value;
@@ -419,6 +523,16 @@ export function renderApp({ sessionId, session }) {
         pendingNpcs = proposals;
       }
 
+      const items = parseItemProposals(result.text);
+      if (items.length) {
+        pendingItems = items;
+      }
+
+      const questUpdate = parseQuestUpdate(result.text);
+      if (questUpdate) {
+        pendingQuest = questUpdate;
+      }
+
       // PC schema: in setup_pc phase, allow 1-click save
       if ((result.next?.phase || phase) === Phase.setup_pc || phase === Phase.setup_pc) {
         const pc = parsePcCard(result.text);
@@ -433,6 +547,8 @@ export function renderApp({ sessionId, session }) {
       renderState();
       renderPcDraft();
       renderNpcProposals();
+      renderItemProposals();
+      renderQuestProposal();
       renderOptions(enforceOptions ? result.options || [] : []);
     } catch (e) {
       session.messages.push({
@@ -485,7 +601,7 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.playing;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
-    insertIntoInput('我接收任务，并准备采取行动。');
+    submit('我接收任务，并准备采取行动。');
   };
 
   el.providerSelect.onchange = () => {
@@ -511,7 +627,6 @@ export function renderApp({ sessionId, session }) {
     session.phase = el.phaseSelect.value;
     updateSession(sessionId, (s) => Object.assign(s, session));
   };
->>>>>>> cd8e17e161677d7c057908cab709b963ebfea4fe
 
   el.saveStateBtn.onclick = () => {
     if (!el.metaToggle.checked) {
@@ -523,6 +638,7 @@ export function renderApp({ sessionId, session }) {
       session.state = next;
       updateSession(sessionId, (s) => Object.assign(s, session));
       alert('已保存。下一轮将按新设定运行。');
+      submit('我已更新世界观/角色设定，请继续。');
     } catch (e) {
       alert('右侧不是合法 JSON，无法保存。');
     }
@@ -546,6 +662,8 @@ export function renderApp({ sessionId, session }) {
   renderState();
   renderPcDraft();
   renderNpcProposals();
+  renderItemProposals();
+  renderQuestProposal();
   renderOptions([]);
 }
 
