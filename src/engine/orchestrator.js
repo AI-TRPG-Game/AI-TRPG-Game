@@ -124,23 +124,28 @@ export async function runFlowTurn({
 
   // 3) Generate final narrative for the requested flowType
   let raw = await callOnce({ flowType, userText, checkResult });
-  let parsed = parseABCDOptions(raw);
 
-  // one-retry repair if needed
-  if (!parsed && retryOnFormatFailure) {
-    const retryUser =
-      '请把你刚才的回复【重写一次】并满足：\n' +
-      '1) 正文在上，\n' +
-      '2) 结尾必须严格包含四行选项：A./B./C./D.，\n' +
-      '3) D 必须以“自由活动：”开头，\n' +
-      '4) 不要输出多余解释、不要输出 Markdown 代码块。';
+  let text = raw;
+  let options = [];
+  if (flowType === FlowType.NORMAL_TURN) {
+    let parsed = parseABCDOptions(raw);
 
-    raw = await callOnce({ flowType, userText: retryUser, checkResult });
-    parsed = parseABCDOptions(raw);
+    // one-retry repair if needed
+    if (!parsed && retryOnFormatFailure) {
+      const retryUser =
+        '请把你刚才的回复【重写一次】并满足：\n' +
+        '1) 正文在上，\n' +
+        '2) 结尾必须严格包含四行选项：A./B./C./D.，\n' +
+        '3) D 必须以“自由活动：”开头，\n' +
+        '4) 不要输出多余解释、不要输出 Markdown 代码块。';
+
+      raw = await callOnce({ flowType, userText: retryUser, checkResult });
+      parsed = parseABCDOptions(raw);
+    }
+
+    text = parsed?.narrative || raw;
+    options = parsed?.options || [];
   }
-
-  const text = parsed?.narrative || raw;
-  const options = parsed?.options || [];
 
   // Phase transitions (minimal but useful)
   let nextPhase = phase;
