@@ -13,6 +13,24 @@ const DEFAULT_RULESETS = {
     '只输出三行：\nneeds_check: yes|no\ndice: d20|d100\nreason: <一句话原因>\n不要输出其它文字。',
 };
 
+const WORLD_GEN_SYSTEM_PROMPT =
+  '我在尝试一种新型的AI跑团，旨在通过结合AI创作与跑团游戏元素，' +
+  '创造出文学性与娱乐性并重的RPG体验。请你根据CoC7th规则，扮演kp，辅助我完成跑团。' +
+  '现在我们先创建世界，根据以下文段生成文风恰切、有代入感的世界观描述。';
+
+const WORLD_GEN_OUTPUT_FORMAT =
+  '世界观描述段落的输出格式要求：将世界观描述内容放置于 <world_description> 与 </world_description> 标签之间，' +
+  '标签之间不可以有无关内容。';
+
+const PC_GEN_SYSTEM_PROMPT =
+  '我在尝试一种新型的AI跑团，旨在通过结合AI创作与跑团游戏元素，' +
+  '创造出文学性与娱乐性并重的RPG体验。请你根据CoC7th规则，扮演KP，辅助我完成跑团。现在我们要创建主角的人物设定。';
+
+const PC_GEN_OUTPUT_FORMAT =
+  '主角人物设定的输出格式要求：将人物档案放置于 <character_card> 与 </character_card> 标签之间，' +
+  '必须包含以下字段：姓名、年龄、性别、职业、外貌、性格、背景故事（含家世与教育经历）、重要补充。' +
+  '每个字段单独一行，使用“字段名：内容”格式。标签之间不可以有无关内容。';
+
 function json(x) {
   try {
     return JSON.stringify(x, null, 2);
@@ -46,6 +64,7 @@ export function buildFlowPrompt({
     '【特殊数据库 WorldState（权威设定）】',
     json({
       world_background: worldState?.world_background,
+      world_settings: worldState?.world_settings,
       pc: worldState?.pc,
       npcs_tail: (worldState?.npcs || []).slice(-6),
       quest_core: worldState?.quest_core,
@@ -69,28 +88,49 @@ export function buildFlowPrompt({
   }
   const contextBlock = contextLines.length ? contextLines.join('\n') : '';
 
+  const worldHistory = Array.isArray(worldState?.world_history)
+    ? worldState.world_history.slice(-20)
+    : [];
+  const worldHistoryBlock = worldHistory.length
+    ? ['【历史记录（仅包含用户prompt与LLM输出）】', ...worldHistory.map((h) => h.trim())].join('\n')
+    : '';
+
+  const pcHistory = Array.isArray(worldState?.pc_history)
+    ? worldState.pc_history.slice(-20)
+    : [];
+  const pcHistoryBlock = pcHistory.length
+    ? ['【历史记录（仅包含用户prompt与LLM输出）】', ...pcHistory.map((h) => h.trim())].join('\n')
+    : '';
+
   if (flowType === FlowType.WORLD_GEN) {
     return [
       base,
+      `（系统辅助性指令）\n${WORLD_GEN_SYSTEM_PROMPT}`,
+      `（输出格式要求）\n${WORLD_GEN_OUTPUT_FORMAT}`,
       '你现在处于【Meta/世界观设定】阶段。',
       '目标：根据用户关键词生成“世界观与背景”的可编辑文本。',
       '不要推进剧情，不要掷骰，不要输出A/B/C/D。',
+      worldHistoryBlock,
       contextBlock,
       stateBlock,
-      '请输出：\n- 世界观与背景（分段）\n- 3条可选的进一步追问/补充方向（用项目符号）',
+      '只输出世界观描述本体，严格放在标签内，不要输出其它内容。',
     ].join('\n\n');
   }
 
   if (flowType === FlowType.PC_GEN) {
     return [
       base,
+      `（系统辅助性指令）\n${PC_GEN_SYSTEM_PROMPT}`,
+      `世界观描述如下：\n${worldState?.world_settings || worldState?.world_background || ''}`,
+      `（输出格式要求）\n${PC_GEN_OUTPUT_FORMAT}`,
       '你现在处于【Meta/主角设定】阶段。',
       '目标：根据世界观与用户输入生成主角卡。',
-      `主角卡必须严格按以下 schema 输出：${rulesets.pc_card_format}`,
       '输出时不要夹杂额外段落、不要使用项目符号、不要输出A/B/C/D。',
+      pcHistoryBlock,
       contextBlock,
       stateBlock,
-      '请只输出主角卡内容（严格逐项）。',
+      '请根据以下描述进行填充与补全：',
+      userText,
     ].join('\n\n');
   }
 

@@ -29,12 +29,19 @@ function ensureWorldState(session) {
     session.state.world_background = session.state.world || '默认世界观：小镇与一座废弃教堂。';
   }
 
+  if (!('world_settings' in session.state)) {
+    session.state.world_settings = session.state.world_background || '';
+  }
+
+  if (!('pc_history' in session.state)) session.state.pc_history = [];
+
   if (!('pc' in session.state)) {
     const ch = session.state.character || { name: '调查员', hp: 10, san: 10 };
     session.state.pc = {
       name: ch.name,
       age: '',
       gender: '',
+      occupation: '',
       race: '',
       personality: '',
       appearance: '',
@@ -55,6 +62,8 @@ function ensureWorldState(session) {
   }
 
   if (!('rulesets' in session.state)) session.state.rulesets = {};
+
+  if (!('world_history' in session.state)) session.state.world_history = [];
 
   if (!('diceLog' in session.state)) session.state.diceLog = session.state.diceLog || [];
   if (!('lastRoll' in session.state)) session.state.lastRoll = session.state.lastRoll || null;
@@ -80,10 +89,13 @@ export function createSession() {
     summary: '',
     state: {
       world_background: '默认世界观：小镇与一座废弃教堂。',
+      world_settings: '默认世界观：小镇与一座废弃教堂。',
+      pc_history: [],
       pc: {
         name: '调查员',
         age: '',
         gender: '',
+        occupation: '',
         race: '',
         personality: '',
         appearance: '',
@@ -98,6 +110,7 @@ export function createSession() {
       quest_current: '当前任务：调查教堂的怪声。',
       inventory: [],
       rulesets: {},
+      world_history: [],
       diceLog: [],
       lastRoll: null,
     },

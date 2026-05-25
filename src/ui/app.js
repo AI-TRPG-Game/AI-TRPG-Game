@@ -31,18 +31,45 @@ function parsePcCard(text) {
     name: get('姓名') || '',
     age: get('年龄') || '',
     gender: get('性别') || '',
+    occupation: get('职业') || '',
     race: get('种族') || '',
     personality: get('性格') || '',
     appearance: get('外貌') || '',
     background: get('家世与教育背景') || '',
+    background_full: get('背景故事（含家世与教育经历）') || '',
     other: get('其余') || '',
+    other_full: get('重要补充') || '',
     raw: text.trim(),
   };
 
   // Require at least name; otherwise treat as invalid.
   if (!card.name) return null;
+  if (card.background_full && !card.background) card.background = card.background_full;
+  if (card.other_full && !card.other) card.other = card.other_full;
   return card;
 }
+
+function extractWorldDescription(text) {
+  if (!text || typeof text !== 'string') return null;
+  const m = /<world_description>\s*([\s\S]*?)\s*<\/world_description>/.exec(text);
+  if (!m) return null;
+  return m[1].trim();
+}
+
+function extractCharacterCard(text) {
+  if (!text || typeof text !== 'string') return null;
+  const m = /<character_card>\s*([\s\S]*?)\s*<\/character_card>/.exec(text);
+  if (!m) return null;
+  return m[1].trim();
+}
+
+const WORLD_SETUP_GUIDE =
+  '【世界设定阶段】\n' +
+  '请用几句话描述你希望的世界类型、风格或核心冲突。你可以说“一个蒸汽朋克风的低魔世界”，或“大航海时代背景下的克苏鲁神话”，然后我会为你扩写成完整的世界观与背景。调整好世界观后请点击“保存世界设定”按钮。';
+
+const PC_SETUP_GUIDE =
+  '【人物设定阶段】\n' +
+  '接下来请为你的故事设定主角。你可以直接描述，比如“一个退伍老兵，沉默寡言但心地善良”，或“一个好奇心过重的医学院学生”。我会为你生成一份详细的人物档案。调整满意后请点击“保存主角设定”按钮。';
 
 export function renderApp({ sessionId, session }) {
   const app = document.querySelector('#app');
@@ -78,7 +105,9 @@ export function renderApp({ sessionId, session }) {
         <!-- Doc-aligned buttons -->
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <button id="btnWorldSetup">开启故事设定（世界观）</button>
-          <button id="btnPCSetup">开启设定主角</button>
+          <button id="btnSaveWorld">存档当前世界观</button>
+          <button id="btnPCSetup">开启人物设定</button>
+          <button id="btnSavePC">保存主角设定</button>
           <button id="btnOpening">故事开幕</button>
           <button id="btnAcceptQuest">接收任务</button>
         </div>
@@ -146,6 +175,28 @@ export function renderApp({ sessionId, session }) {
       <div style="padding:12px;display:flex;flex-direction:column;gap:8px;">
         <h3 style="margin:0;">特殊数据库（WorldState）</h3>
         <div style="font-size:12px;color:#666;">（Meta 模式可编辑。点击保存写入存档。）</div>
+        <div id="pcPanel" style="border:1px solid #eee;border-radius:8px;padding:8px;background:#fff;">
+          <div style="font-weight:600;margin-bottom:6px;">主角设定</div>
+          <div style="display:grid;grid-template-columns:90px 1fr;gap:6px;align-items:center;">
+            <label for="pcNameInput">姓名</label>
+            <input id="pcNameInput" />
+            <label for="pcAgeInput">年龄</label>
+            <input id="pcAgeInput" />
+            <label for="pcGenderInput">性别</label>
+            <input id="pcGenderInput" />
+            <label for="pcOccupationInput">职业</label>
+            <input id="pcOccupationInput" />
+            <label for="pcAppearanceInput">外貌</label>
+            <input id="pcAppearanceInput" />
+            <label for="pcPersonalityInput">性格</label>
+            <input id="pcPersonalityInput" />
+            <label for="pcBackgroundInput">背景故事</label>
+            <textarea id="pcBackgroundInput" rows="3" style="width:100%;box-sizing:border-box;"></textarea>
+            <label for="pcOtherInput">重要补充</label>
+            <textarea id="pcOtherInput" rows="2" style="width:100%;box-sizing:border-box;"></textarea>
+          </div>
+          <button id="savePcFormBtn" style="margin-top:8px;">保存主角设定</button>
+        </div>
         <div id="stateView" style="white-space:pre-wrap;background:#f6f6f6;border:1px solid #eee;border-radius:8px;padding:8px;flex:1;overflow:auto;" contenteditable="true"></div>
         <button id="saveStateBtn">保存右侧修改（Meta 模式）</button>
       </div>
@@ -168,6 +219,15 @@ export function renderApp({ sessionId, session }) {
     enforceOptionsToggle: app.querySelector('#enforceOptionsToggle'),
     stateView: app.querySelector('#stateView'),
     saveStateBtn: app.querySelector('#saveStateBtn'),
+    pcNameInput: app.querySelector('#pcNameInput'),
+    pcAgeInput: app.querySelector('#pcAgeInput'),
+    pcGenderInput: app.querySelector('#pcGenderInput'),
+    pcOccupationInput: app.querySelector('#pcOccupationInput'),
+    pcAppearanceInput: app.querySelector('#pcAppearanceInput'),
+    pcPersonalityInput: app.querySelector('#pcPersonalityInput'),
+    pcBackgroundInput: app.querySelector('#pcBackgroundInput'),
+    pcOtherInput: app.querySelector('#pcOtherInput'),
+    savePcFormBtn: app.querySelector('#savePcFormBtn'),
     providerSelect: app.querySelector('#providerSelect'),
     apiKeyInput: app.querySelector('#apiKeyInput'),
     modelInput: app.querySelector('#modelInput'),
@@ -176,7 +236,9 @@ export function renderApp({ sessionId, session }) {
     systemPromptInput: app.querySelector('#systemPromptInput'),
 
     btnWorldSetup: app.querySelector('#btnWorldSetup'),
+    btnSaveWorld: app.querySelector('#btnSaveWorld'),
     btnPCSetup: app.querySelector('#btnPCSetup'),
+    btnSavePC: app.querySelector('#btnSavePC'),
     btnOpening: app.querySelector('#btnOpening'),
     btnAcceptQuest: app.querySelector('#btnAcceptQuest'),
   };
@@ -229,8 +291,44 @@ export function renderApp({ sessionId, session }) {
     el.chat.scrollTop = el.chat.scrollHeight;
   }
 
+  function pushSystemMessage({ content, mode, phase }) {
+    session.messages = [{ role: 'assistant', content, mode, phase }];
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderChat();
+  }
+
   function renderState() {
     el.stateView.textContent = JSON.stringify(session.state, null, 2);
+    renderPcPanel();
+  }
+
+  function renderPcPanel() {
+    const pc = session.state.pc || {};
+    el.pcNameInput.value = pc.name || '';
+    el.pcAgeInput.value = pc.age || '';
+    el.pcGenderInput.value = pc.gender || '';
+    el.pcOccupationInput.value = pc.occupation || '';
+    el.pcAppearanceInput.value = pc.appearance || '';
+    el.pcPersonalityInput.value = pc.personality || '';
+    el.pcBackgroundInput.value = pc.background || '';
+    el.pcOtherInput.value = pc.other || '';
+  }
+
+  function buildCharacterCardText(pc) {
+    return [
+      `姓名：${pc.name || ''}`,
+      `年龄：${pc.age || ''}`,
+      `性别：${pc.gender || ''}`,
+      `职业：${pc.occupation || ''}`,
+      `外貌：${pc.appearance || ''}`,
+      `性格：${pc.personality || ''}`,
+      `背景故事（含家世与教育经历）：${pc.background || ''}`,
+      `重要补充：${pc.other || ''}`,
+    ].join('\n');
+  }
+
+  function updateSaveStateLabel() {
+    el.saveStateBtn.textContent = '保存右侧修改（Meta 模式）';
   }
 
   function insertIntoInput(text) {
@@ -517,6 +615,19 @@ export function renderApp({ sessionId, session }) {
         phase: result.next?.phase || phase,
       });
 
+      const nextPhase = result.next?.phase || phase;
+      if (nextPhase === Phase.setup_world) {
+        session.state.world_history = session.state.world_history || [];
+        session.state.world_history.push(`User: ${text}`);
+        session.state.world_history.push(`LLM: ${result.text}`);
+      }
+
+      if (nextPhase === Phase.setup_pc) {
+        session.state.pc_history = session.state.pc_history || [];
+        session.state.pc_history.push(`User: ${text}`);
+        session.state.pc_history.push(`LLM: ${result.text}`);
+      }
+
       // parse npc proposals from assistant text, but do NOT auto-save
       const proposals = parseNpcProposals(result.text);
       if (proposals.length) {
@@ -539,7 +650,7 @@ export function renderApp({ sessionId, session }) {
         if (pc) pendingPc = pc;
       }
 
-      session.phase = result.next?.phase || phase;
+      session.phase = nextPhase;
       el.phaseSelect.value = session.phase;
 
       updateSession(sessionId, (s) => Object.assign(s, session));
@@ -549,7 +660,13 @@ export function renderApp({ sessionId, session }) {
       renderNpcProposals();
       renderItemProposals();
       renderQuestProposal();
-      renderOptions(enforceOptions ? result.options || [] : []);
+
+      const shouldHideOptions =
+        nextPhase === Phase.setup_world ||
+        nextPhase === Phase.setup_pc ||
+        nextPhase === Phase.opening;
+      const optionsToShow = shouldHideOptions ? [] : enforceOptions ? result.options || [] : [];
+      renderOptions(optionsToShow);
     } catch (e) {
       session.messages.push({
         role: 'assistant',
@@ -577,7 +694,112 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.setup_world;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
-    insertIntoInput('请根据关键词生成世界观与背景：');
+    el.textInput.value = '';
+    pendingNpcs = [];
+    pendingItems = [];
+    pendingQuest = null;
+    pendingPc = null;
+    renderPcDraft();
+    renderNpcProposals();
+    renderItemProposals();
+    renderQuestProposal();
+    renderOptions([]);
+    updateSaveStateLabel();
+    pushSystemMessage({ content: WORLD_SETUP_GUIDE, mode: 'meta', phase: Phase.setup_world });
+  };
+
+  el.btnSaveWorld.onclick = () => {
+    let extracted = null;
+    for (const m of [...session.messages].reverse()) {
+      if (m.role !== 'assistant' || m.phase !== Phase.setup_world) continue;
+      const hit = extractWorldDescription(m.content || '');
+      if (hit) {
+        extracted = hit;
+        break;
+      }
+    }
+    if (!extracted) {
+      alert('未找到世界观标签内容，请先生成世界观。');
+      return;
+    }
+
+    session.state.world_settings = extracted;
+    session.state.world_background = extracted;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderState();
+
+    session.messages.push({
+      role: 'assistant',
+      content: '世界观已保存，你可以在侧边栏随时查看。如果不需要再调整，请点击“开启人物设定”按钮，进入下一阶段。',
+      mode: 'meta',
+      phase: Phase.setup_world,
+    });
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderChat();
+  };
+
+  el.btnSavePC.onclick = () => {
+    let extracted = null;
+    for (const m of [...session.messages].reverse()) {
+      if (m.role !== 'assistant' || m.phase !== Phase.setup_pc) continue;
+      const hit = extractCharacterCard(m.content || '');
+      if (hit) {
+        extracted = hit;
+        break;
+      }
+    }
+    if (!extracted) {
+      alert('未找到人物档案标签内容，请先生成人物设定。');
+      return;
+    }
+
+    session.state.main_character = extracted;
+    const parsed = parsePcCard(extracted) || {};
+    session.state.pc = {
+      ...session.state.pc,
+      name: parsed.name || session.state.pc.name || '',
+      age: parsed.age || '',
+      gender: parsed.gender || '',
+      occupation: parsed.occupation || '',
+      race: parsed.race || session.state.pc.race || '',
+      personality: parsed.personality || '',
+      appearance: parsed.appearance || '',
+      background: parsed.background || '',
+      other: parsed.other || '',
+      raw: extracted,
+    };
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderState();
+
+    session.messages.push({
+      role: 'assistant',
+      content: '主角设定已保存，你可以在侧边栏随时查看。如果不需要再调整，请点击“故事开幕”，开始冒险。',
+      mode: 'meta',
+      phase: Phase.setup_pc,
+    });
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderChat();
+  };
+
+  el.savePcFormBtn.onclick = () => {
+    const nextPc = {
+      ...session.state.pc,
+      name: el.pcNameInput.value.trim(),
+      age: el.pcAgeInput.value.trim(),
+      gender: el.pcGenderInput.value.trim(),
+      occupation: el.pcOccupationInput.value.trim(),
+      appearance: el.pcAppearanceInput.value.trim(),
+      personality: el.pcPersonalityInput.value.trim(),
+      background: el.pcBackgroundInput.value.trim(),
+      other: el.pcOtherInput.value.trim(),
+    };
+    const cardText = buildCharacterCardText(nextPc);
+    nextPc.raw = cardText;
+    session.state.pc = nextPc;
+    session.state.main_character = cardText;
+    updateSession(sessionId, (s) => Object.assign(s, session));
+    renderState();
+    alert('主角设定已保存。');
   };
 
   el.btnPCSetup.onclick = () => {
@@ -585,7 +807,18 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.setup_pc;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
-    insertIntoInput('请按“姓名/年龄/性别/种族/性格/外貌/家世与教育背景/其余”生成主角设定：');
+    updateSaveStateLabel();
+    el.textInput.value = '';
+    pendingNpcs = [];
+    pendingItems = [];
+    pendingQuest = null;
+    pendingPc = null;
+    renderPcDraft();
+    renderNpcProposals();
+    renderItemProposals();
+    renderQuestProposal();
+    renderOptions([]);
+    pushSystemMessage({ content: PC_SETUP_GUIDE, mode: 'meta', phase: Phase.setup_pc });
   };
 
   el.btnOpening.onclick = () => {
@@ -593,6 +826,7 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.opening;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
+    updateSaveStateLabel();
     insertIntoInput('故事开幕。');
   };
 
@@ -601,6 +835,7 @@ export function renderApp({ sessionId, session }) {
     session.phase = Phase.playing;
     el.phaseSelect.value = session.phase;
     updateSession(sessionId, (s) => Object.assign(s, session));
+    updateSaveStateLabel();
     submit('我接收任务，并准备采取行动。');
   };
 
@@ -626,6 +861,7 @@ export function renderApp({ sessionId, session }) {
   el.phaseSelect.onchange = () => {
     session.phase = el.phaseSelect.value;
     updateSession(sessionId, (s) => Object.assign(s, session));
+    updateSaveStateLabel();
   };
 
   el.saveStateBtn.onclick = () => {
@@ -637,6 +873,12 @@ export function renderApp({ sessionId, session }) {
       const next = JSON.parse(el.stateView.textContent);
       session.state = next;
       updateSession(sessionId, (s) => Object.assign(s, session));
+      const isSetupPhase = session.phase === Phase.setup_world || session.phase === Phase.setup_pc;
+      if (isSetupPhase) {
+        alert('已保存。你可以继续调整设定，或使用下方存档按钮确认。');
+        renderState();
+        return;
+      }
       alert('已保存。下一轮将按新设定运行。');
       submit('我已更新世界观/角色设定，请继续。');
     } catch (e) {
@@ -665,6 +907,7 @@ export function renderApp({ sessionId, session }) {
   renderItemProposals();
   renderQuestProposal();
   renderOptions([]);
+  updateSaveStateLabel();
 }
 
 function escapeHtml(s) {
