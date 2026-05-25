@@ -89,13 +89,15 @@ export function buildFlowPrompt({
   const contextBlock = contextLines.length ? contextLines.join('\n') : '';
 
   const worldHistory = Array.isArray(worldState?.world_history)
-    ? worldState.world_history
+    ? worldState.world_history.slice(-20)
     : [];
   const worldHistoryBlock = worldHistory.length
     ? ['【历史记录（仅包含用户prompt与LLM输出）】', ...worldHistory.map((h) => h.trim())].join('\n')
     : '';
 
-  const pcHistory = Array.isArray(worldState?.pc_history) ? worldState.pc_history : [];
+  const pcHistory = Array.isArray(worldState?.pc_history)
+    ? worldState.pc_history.slice(-20)
+    : [];
   const pcHistoryBlock = pcHistory.length
     ? ['【历史记录（仅包含用户prompt与LLM输出）】', ...pcHistory.map((h) => h.trim())].join('\n')
     : '';

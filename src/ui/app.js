@@ -31,16 +31,21 @@ function parsePcCard(text) {
     name: get('姓名') || '',
     age: get('年龄') || '',
     gender: get('性别') || '',
+    occupation: get('职业') || '',
     race: get('种族') || '',
     personality: get('性格') || '',
     appearance: get('外貌') || '',
     background: get('家世与教育背景') || '',
+    background_full: get('背景故事（含家世与教育经历）') || '',
     other: get('其余') || '',
+    other_full: get('重要补充') || '',
     raw: text.trim(),
   };
 
   // Require at least name; otherwise treat as invalid.
   if (!card.name) return null;
+  if (card.background_full && !card.background) card.background = card.background_full;
+  if (card.other_full && !card.other) card.other = card.other_full;
   return card;
 }
 
@@ -323,11 +328,7 @@ export function renderApp({ sessionId, session }) {
   }
 
   function updateSaveStateLabel() {
-    if (session.phase === Phase.setup_world) {
-      el.saveStateBtn.textContent = '保存世界设定';
-    } else {
-      el.saveStateBtn.textContent = '保存右侧修改（Meta 模式）';
-    }
+    el.saveStateBtn.textContent = '保存右侧修改（Meta 模式）';
   }
 
   function insertIntoInput(text) {
@@ -708,10 +709,15 @@ export function renderApp({ sessionId, session }) {
   };
 
   el.btnSaveWorld.onclick = () => {
-    const lastWorldMsg = [...session.messages]
-      .reverse()
-      .find((m) => m.role === 'assistant' && m.phase === Phase.setup_world);
-    const extracted = extractWorldDescription(lastWorldMsg?.content || '');
+    let extracted = null;
+    for (const m of [...session.messages].reverse()) {
+      if (m.role !== 'assistant' || m.phase !== Phase.setup_world) continue;
+      const hit = extractWorldDescription(m.content || '');
+      if (hit) {
+        extracted = hit;
+        break;
+      }
+    }
     if (!extracted) {
       alert('未找到世界观标签内容，请先生成世界观。');
       return;
@@ -733,17 +739,35 @@ export function renderApp({ sessionId, session }) {
   };
 
   el.btnSavePC.onclick = () => {
-    const lastPcMsg = [...session.messages]
-      .reverse()
-      .find((m) => m.role === 'assistant' && m.phase === Phase.setup_pc);
-    const extracted = extractCharacterCard(lastPcMsg?.content || '');
+    let extracted = null;
+    for (const m of [...session.messages].reverse()) {
+      if (m.role !== 'assistant' || m.phase !== Phase.setup_pc) continue;
+      const hit = extractCharacterCard(m.content || '');
+      if (hit) {
+        extracted = hit;
+        break;
+      }
+    }
     if (!extracted) {
       alert('未找到人物档案标签内容，请先生成人物设定。');
       return;
     }
 
     session.state.main_character = extracted;
-    session.state.pc = { ...session.state.pc, raw: extracted };
+    const parsed = parsePcCard(extracted) || {};
+    session.state.pc = {
+      ...session.state.pc,
+      name: parsed.name || session.state.pc.name || '',
+      age: parsed.age || '',
+      gender: parsed.gender || '',
+      occupation: parsed.occupation || '',
+      race: parsed.race || session.state.pc.race || '',
+      personality: parsed.personality || '',
+      appearance: parsed.appearance || '',
+      background: parsed.background || '',
+      other: parsed.other || '',
+      raw: extracted,
+    };
     updateSession(sessionId, (s) => Object.assign(s, session));
     renderState();
 
@@ -849,6 +873,12 @@ export function renderApp({ sessionId, session }) {
       const next = JSON.parse(el.stateView.textContent);
       session.state = next;
       updateSession(sessionId, (s) => Object.assign(s, session));
+      const isSetupPhase = session.phase === Phase.setup_world || session.phase === Phase.setup_pc;
+      if (isSetupPhase) {
+        alert('已保存。你可以继续调整设定，或使用下方存档按钮确认。');
+        renderState();
+        return;
+      }
       alert('已保存。下一轮将按新设定运行。');
       submit('我已更新世界观/角色设定，请继续。');
     } catch (e) {
