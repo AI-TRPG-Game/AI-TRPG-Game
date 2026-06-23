@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI+TRPG</title>
+    <style>
+        /* ── Night Theme (default) ── */
+        :root {
+            --bg-root: #0d0f14;
+            --bg-panel: #14161e;
+            --bg-card: #1a1d28;
+            --bg-hover: #22263a;
+            --text-primary: #d8dae3;
+            --text-secondary: #878ea8;
+            --text-muted: #5c627a;
+            --accent: #c9a050;
+            --accent-hover: #d4af5e;
+            --accent-dim: #6b5428;
+            --divider-gold: #b8860b;
+            --kp-bubble: #1b1e2a;
+            --kp-border: #2a2e3d;
+            --kp-text: #c4c8d4;
+            --user-bubble: #1a2340;
+            --user-border: #2a3558;
+            --user-text: #bcc8e8;
+            --system-bg: #251e35;
+            --system-border: #3a2e52;
+            --system-text: #b0a0c8;
+            --error-bg: #2a1518;
+            --error-border: #4a2528;
+            --danger: #c0554a;
+            --success: #6a9e7a;
+            --border-subtle: #1e2230;
+            --border-normal: #2a2f40;
+            --input-bg: var(--bg-root);
+            --input-text: var(--text-primary);
+            --radius-sm: 4px;
+            --radius-md: 8px;
+            --radius-lg: 12px;
+            --font-sans: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            --font-serif: 'Georgia', 'Noto Serif SC', 'STSong', 'SimSun', serif;
+            --font-mono: 'Cascadia Code', 'Consolas', 'SF Mono', 'Courier New', monospace;
+            --transition: 150ms ease;
+        }
+
+        /* ── Light Theme ── */
+        body.light {
+            --bg-root: #f5f0e8;
+            --bg-panel: #faf7f0;
+            --bg-card: #fffef9;
+            --bg-hover: #ede6d4;
+            --text-primary: #2c2416;
+            --text-secondary: #5c4a2e;
+            --text-muted: #8a7554;
+            --accent: #8b6914;
+            --accent-hover: #a6801a;
+            --accent-dim: #c9a050;
+            --divider-gold: #b8860b;
+            --kp-bubble: #f0e7d6;
+            --kp-border: #d4c4a0;
+            --kp-text: #3a2e1e;
+            --user-bubble: #e0e6f0;
+            --user-border: #b0c0d8;
+            --user-text: #2a3040;
+            --system-bg: #e8e0f0;
+            --system-border: #c8b8d8;
+            --system-text: #3a2e50;
+            --error-bg: #f8e4e0;
+            --error-border: #d8b8b0;
+            --danger: #a04030;
+            --success: #4a7a5a;
+            --border-subtle: #d8ceb8;
+            --border-normal: #b8a888;
+            --input-bg: #ffffff;
+            --input-text: #2c2416;
+        }
+
+        /* ── Reset ── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-root);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-normal); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* ── Layout ── */
+        #app {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        #main-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        /* ── Header ── */
+        #header {
+            padding: 10px 20px;
+            background: var(--bg-panel);
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        #header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            color: var(--text-primary);
+        }
+        #header-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #phase-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        /* ── Theme Toggle ── */
+        #btn-theme {
+            padding: 4px 10px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 14px;
+            transition: all var(--transition);
+        }
+        #btn-theme:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+
+        /* ── Messages ── */
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: radial-gradient(ellipse at 50% 0%, rgba(25,30,50,0.15) 0%, transparent 70%);
+        }
+        body.light #messages {
+            background: radial-gradient(ellipse at 50% 0%, rgba(180,160,120,0.08) 0%, transparent 70%);
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: var(--radius-lg);
+            max-width: 80%;
+            line-height: 1.7;
+            white-space: pre-wrap;
+            word-break: break-word;
+            animation: msg-in 200ms ease-out;
+        }
+        @keyframes msg-in {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* KP 叙述 */
+        .message.bot {
+            font-family: var(--font-serif);
+            font-size: 15px;
+            background: var(--kp-bubble);
+            border: 1px solid var(--kp-border);
+            color: var(--kp-text);
+            align-self: flex-start;
+            border-bottom-left-radius: var(--radius-sm);
+        }
+
+        /* 玩家发言 */
+        .message.user {
+            font-family: var(--font-sans);
+            font-size: 14px;
+            background: var(--user-bubble);
+            border: 1px solid var(--user-border);
+            color: var(--user-text);
+            align-self: flex-end;
+            border-bottom-right-radius: var(--radius-sm);
+        }
+
+        /* 系统消息 */
+        .message.system {
+            font-family: var(--font-sans);
+            font-size: 12px;
+            background: var(--system-bg);
+            border: 1px solid var(--system-border);
+            color: var(--system-text);
+            align-self: center;
+            max-width: 90%;
+            text-align: center;
+            border-radius: var(--radius-md);
+        }
+
+        /* 错误 */
+        .message.error {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            background: var(--error-bg);
+            border: 1px solid var(--error-border);
+            color: var(--danger);
+            align-self: center;
+            max-width: 90%;
+            text-align: center;
+            border-radius: var(--radius-md);
+        }
+
+        /* KP 气泡内分段渲染 */
+        .kp-divider {
+            display: block;
+            width: 60%;
+            margin: 10px auto;
+            border: none;
+            border-top: 1px solid var(--divider-gold);
+            opacity: 0.45;
+        }
+        .kp-block {} /* 继承默认文本样式，不做额外修饰 */
+
+        /* ── Dice Confirm Buttons ── */
+        .dice-confirm-btns {
+            display: flex;
+            gap: 10px;
+            margin-top: 4px;
+        }
+        .dice-btn {
+            padding: 6px 16px;
+            border-radius: 6px;
+            border: none;
+            font-family: var(--font-sans);
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .dice-btn-confirm {
+            background: var(--accent);
+            color: #fff;
+        }
+        .dice-btn-confirm:hover {
+            background: var(--accent-hover);
+        }
+        .dice-btn-cancel {
+            background: var(--bg-raised);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-subtle);
+        }
+        .dice-btn-cancel:hover {
+            background: var(--error-bg);
+            color: var(--danger);
+        }
+
+        /* ── Options Bar ── */
+        #options-bar {
+            padding: 8px 20px;
+            display: flex;
+            gap: 10px;
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+            min-height: 52px;
+            align-items: center;
+        }
+        .option-btn {
+            width: 40px;
+            height: 40px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        .option-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .option-btn.selected {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #0d0f14;
+        }
+        body.light .option-btn.selected { color: #fffef9; }
+
+        /* ── Action Buttons ── */
+        #action-buttons {
+            padding: 6px 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            background: var(--bg-panel);
+            flex-shrink: 0;
+            min-height: 38px;
+            align-items: center;
+        }
+        #action-buttons button {
+            padding: 5px 14px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        #action-buttons button:hover:not(:disabled) {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+        #action-buttons button:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        /* ── Input Area ── */
+        #input-area {
+            display: flex;
+            padding: 10px 20px;
+            gap: 10px;
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border-subtle);
+            flex-shrink: 0;
+        }
+        #prompt-input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--input-bg);
+            color: var(--input-text);
+            font-size: 14px;
+            font-family: var(--font-sans);
+            transition: border-color var(--transition);
+            outline: none;
+        }
+        #prompt-input:focus {
+            border-color: var(--accent);
+        }
+        #prompt-input::placeholder { color: var(--text-muted); }
+        #send-button {
+            padding: 10px 24px;
+            border: none;
+            border-radius: var(--radius-md);
+            background: var(--accent);
+            color: #0d0f14;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            font-family: var(--font-sans);
+            transition: background var(--transition);
+        }
+        body.light #send-button { color: #fffef9; }
+        #send-button:hover:not(:disabled) { background: var(--accent-hover); }
+        #send-button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* ── Sidebar ── */
+        #sidebar {
+            width: 300px;
+            overflow-y: auto;
+            padding: 16px 18px;
+            background: var(--bg-panel);
+            flex-shrink: 0;
+        }
+        #sidebar h3 {
+            margin: 18px 0 8px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--accent);
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 6px;
+        }
+        #sidebar h3:first-child { margin-top: 0; }
+        #sidebar textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 10px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--bg-root);
+            color: var(--text-primary);
+            font-size: 12px;
+            font-family: var(--font-sans);
+            resize: vertical;
+            line-height: 1.5;
+            outline: none;
+            transition: border-color var(--transition);
+        }
+        #sidebar textarea:focus { border-color: var(--accent); }
+        .sidebar-item {
+            padding: 8px 10px;
+            margin-bottom: 4px;
+            background: var(--bg-card);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-secondary);
+            border: 1px solid var(--border-subtle);
+        }
+        .sidebar-item strong {
+            color: var(--text-primary);
+            display: block;
+            margin-bottom: 2px;
+            font-size: 13px;
+        }
+        #sidebar button {
+            margin-top: 6px;
+            padding: 5px 12px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 11px;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        #sidebar button:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+
+        /* ── God's Eye Button ── */
+        #btn-godseye {
+            padding: 4px 10px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 14px;
+            transition: all var(--transition);
+        }
+        #btn-godseye:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+
+        /* ── God's Eye Panel ── */
+        #godseye-panel {
+            display: none;
+            width: 50%;
+            min-width: 420px;
+            overflow: hidden;
+            background: #0a0c12;
+            border-left: 1px solid var(--border-normal);
+            flex-direction: column;
+        }
+        body.light #godseye-panel { background: #1c1a14; }
+        #godseye-panel .ge-header {
+            padding: 8px 14px;
+            background: #0e1019;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        body.light #godseye-panel .ge-header { background: #2a2618; }
+        #godseye-panel .ge-title {
+            color: var(--accent);
+            font-weight: 600;
+            font-size: 12px;
+            font-family: var(--font-mono);
+            letter-spacing: 1px;
+        }
+        #btn-godseye-close {
+            padding: 2px 10px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 14px;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        #btn-godseye-close:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+        #godseye-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            line-height: 1.45;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="main-panel">
+            <div id="header">
+                <h2>AI+TRPG</h2>
+                <div id="header-right">
+                    <button id="btn-theme" title="切换主题">&#9728;</button>
+                    <button id="btn-godseye" title="God's Eye">&#128065;</button>
+                    <span id="phase-label">阶段: -</span>
+                </div>
+            </div>
+            <div id="messages"></div>
+            <div id="options-bar"></div>
+            <div id="action-buttons">
+                <button id="btn-save-world" style="display:none;">存档当前世界观</button>
+                <button id="btn-enter-character" style="display:none;">开启人物设定</button>
+                <button id="btn-save-character" style="display:none;">保存主角设定</button>
+                <button id="btn-open-story" style="display:none;">故事开幕</button>
+            </div>
+            <div id="input-area">
+                <input type="text" id="prompt-input" placeholder="输入你的行动…">
+                <button id="send-button">发送</button>
+            </div>
+        </div>
+
+        <div id="sidebar">
+            <h3>世界观与背景</h3>
+            <textarea id="world-settings" readonly placeholder="尚未设定…"></textarea>
+
+            <h3>主角设定</h3>
+            <textarea id="protagonist-settings" placeholder="尚未设定…"></textarea>
+            <button id="btn-save-protagonist">保存修改</button>
+
+            <h3>重要地点</h3>
+            <div id="locations-panel"></div>
+
+            <h3>重要 NPC</h3>
+            <div id="npcs-panel"></div>
+
+            <h3>物品仓库</h3>
+            <div id="inventory-panel"></div>
+        </div>
+
+        <div id="godseye-panel">
+            <div class="ge-header">
+                <span class="ge-title">&#128065; God's Eye</span>
+                <button id="btn-godseye-close">&times;</button>
+            </div>
+            <div id="godseye-content"></div>
+        </div>
+    </div>
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>
