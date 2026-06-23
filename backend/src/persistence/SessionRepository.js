@@ -1,6 +1,8 @@
 import crypto from 'crypto';
 import { GameSession } from '../domain/GameSession.js';
-import { Phase, SubState } from '../domain/enums.js';
+import { Phase, SubState, ChatRole, FlowType } from '../domain/enums.js';
+import { jsonOutputParser } from '../services/JsonOutputParser.js';
+import { textRefiner } from '../services/TextRefiner.js';
 
 function parseJson(value, fallback) {
   try {
@@ -10,8 +12,62 @@ function parseJson(value, fallback) {
   }
 }
 
+function refineRaw(flowType, raw) {
+  const parsed = jsonOutputParser.parse(raw);
+  if (!parsed) return raw;
+  return textRefiner.refine(flowType, parsed).html;
+}
+
+function appendSetupLog(log, entries, flowType) {
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    if (!entry?.content) continue;
+    log.push({
+      role: entry.role === ChatRole.PLAYER ? 'player' : 'kp',
+      content:
+        entry.role === ChatRole.PLAYER
+          ? entry.content
+          : refineRaw(flowType, entry.content),
+      timestamp: entry.timestamp,
+    });
+  }
+}
+
+function rebuildDisplayLog(row, setupHistory, chatRecord, pendingDiceFlow) {
+  const log = [];
+
+  appendSetupLog(log, setupHistory.world, FlowType.WORLD_GEN);
+  appendSetupLog(log, setupHistory.character, FlowType.CHARACTER_GEN);
+
+  for (const entry of chatRecord) {
+    if (!entry?.content) continue;
+    log.push({
+      role: entry.role || ChatRole.KP,
+      content: entry.content,
+      timestamp: entry.timestamp,
+    });
+  }
+
+  if (pendingDiceFlow?.pendingRaw) {
+    log.push({
+      role: ChatRole.KP,
+      content: refineRaw(FlowType.NARRATION_I, pendingDiceFlow.pendingRaw),
+      timestamp: row.updated_at,
+    });
+  }
+
+  return log;
+}
+
 function rowToSession(row) {
   if (!row) return null;
+  const setupHistory = parseJson(row.setup_history, { world: [], character: [] });
+  const chatRecord = parseJson(row.chat_record, []);
+  const pendingDiceFlow = row.pending_dice_flow
+    ? parseJson(row.pending_dice_flow, null)
+    : null;
+  const displayLog = parseJson(row.display_log, []);
+
   return new GameSession({
     id: row.id,
     title: row.title,
@@ -20,15 +76,16 @@ function rowToSession(row) {
     openingDone: Boolean(row.opening_done),
     worldSettings: row.world_settings,
     protagonist: row.protagonist,
-    chatRecord: parseJson(row.chat_record, []),
-    setupHistory: parseJson(row.setup_history, { world: [], character: [] }),
+    chatRecord,
+    setupHistory,
+    displayLog: displayLog.length > 0
+      ? displayLog
+      : rebuildDisplayLog(row, setupHistory, chatRecord, pendingDiceFlow),
     optionBuffer: row.option_buffer,
     locations: parseJson(row.locations, []),
     npcs: parseJson(row.npcs, []),
     inventory: parseJson(row.inventory, []),
-    pendingDiceFlow: row.pending_dice_flow
-      ? parseJson(row.pending_dice_flow, null)
-      : null,
+    pendingDiceFlow,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
@@ -46,12 +103,12 @@ export class SessionRepository {
       .prepare(
         `INSERT INTO sessions (
           id, title, phase, sub_state, opening_done,
-          world_settings, protagonist, chat_record, setup_history,
+          world_settings, protagonist, chat_record, setup_history, display_log,
           option_buffer, locations, npcs, inventory,
           pending_dice_flow, created_at, updated_at
         ) VALUES (
           ?, ?, ?, ?, 0,
-          '', '', '[]', '{"world":[],"character":[]}',
+          '', '', '[]', '{"world":[],"character":[]}', '[]',
           '', '[]', '[]', '[]',
           NULL, ?, ?
         )`
@@ -85,6 +142,7 @@ export class SessionRepository {
           protagonist = ?,
           chat_record = ?,
           setup_history = ?,
+          display_log = ?,
           option_buffer = ?,
           locations = ?,
           npcs = ?,
@@ -102,6 +160,7 @@ export class SessionRepository {
         session.protagonist,
         JSON.stringify(session.chatRecord),
         JSON.stringify(session.setupHistory),
+        JSON.stringify(session.displayLog),
         session.optionBuffer,
         JSON.stringify(session.locations),
         JSON.stringify(session.npcs),

@@ -42,6 +42,12 @@ function runMigrations(database) {
       updated_at TEXT NOT NULL
     );
   `);
+
+  const columns = database.prepare('PRAGMA table_info(sessions)').all();
+  const hasDisplayLog = columns.some(column => column.name === 'display_log');
+  if (!hasDisplayLog) {
+    database.exec(`ALTER TABLE sessions ADD COLUMN display_log TEXT NOT NULL DEFAULT '[]';`);
+  }
 }
 
 export function closeDatabase() {

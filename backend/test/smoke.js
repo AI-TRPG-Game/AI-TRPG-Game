@@ -2,7 +2,8 @@ import { tagParser } from '../src/services/TagParser.js';
 import { diceService } from '../src/services/DiceService.js';
 import { optionResolver } from '../src/services/OptionResolver.js';
 import { inputAssembler } from '../src/services/InputAssembler.js';
-import { FlowType } from '../src/domain/enums.js';
+import { FlowType, SubState } from '../src/domain/enums.js';
+import { GameSession } from '../src/domain/GameSession.js';
 import { getDatabase } from '../src/persistence/database.js';
 import { SessionRepository } from '../src/persistence/SessionRepository.js';
 
@@ -39,12 +40,45 @@ const assembled = inputAssembler.assemble(FlowType.WORLD_GEN, session, {
   userText: '蒸汽朋克世界',
 });
 console.assert(
-  assembled.systemInstruction.includes('CoC7th'),
+  assembled.messages[0].content.includes('CoC7th'),
   'system instruction'
 );
 console.assert(
-  assembled.userContent.includes('蒸汽朋克世界'),
+  assembled.messages.some(m => m.role === 'user' && m.content.includes('蒸汽朋克世界')),
   'user content'
+);
+
+const streamingSession = new GameSession({
+  id: 'streaming',
+  subState: SubState.LLM_STREAMING,
+  pendingDiceFlow: { diceNotation: '1d100' },
+});
+console.assert(
+  streamingSession.toJSON().subState === SubState.LLM_STREAMING,
+  'runtime snapshot keeps transient state'
+);
+console.assert(
+  streamingSession.toClientJSON().subState === SubState.AWAITING_INPUT,
+  'client snapshot recovers streaming state'
+);
+console.assert(
+  streamingSession.toClientJSON().pendingDiceFlow === null,
+  'client snapshot clears stale dice flow'
+);
+streamingSession.recoverTransientState();
+console.assert(
+  streamingSession.subState === SubState.AWAITING_INPUT,
+  'incoming snapshot recovers transient state'
+);
+
+const diceSession = new GameSession({
+  id: 'dice',
+  subState: SubState.DICE_PENDING,
+  pendingDiceFlow: { diceNotation: '1d100' },
+});
+console.assert(
+  diceSession.toClientJSON().subState === SubState.DICE_PENDING,
+  'client snapshot preserves dice pending state'
 );
 
 console.log('All tests passed');

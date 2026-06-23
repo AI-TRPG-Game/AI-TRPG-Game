@@ -14,6 +14,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
     this.apiKey = apiKey || '';
     this.baseUrl = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
     this.model = model || 'deepseek-chat';
+    this.thinkingType = process.env.LLM_THINKING_TYPE || 'adaptive';
   }
 
   /**
@@ -41,7 +42,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
 
     // thinking 模式：叙事阶段启用
     if (thinking) {
-      body.thinking = { type: 'enabled' };
+      body.thinking = { type: this.thinkingType };
     }
 
     // stop 序列：防止 JSON 闭合后继续生成废话

@@ -1,5 +1,10 @@
 import { Phase, SubState } from './enums.js';
 
+const RECOVERABLE_SUB_STATES = new Set([
+  SubState.LLM_STREAMING,
+  SubState.SUMMARIZING,
+]);
+
 export class GameSession {
   constructor(data = {}) {
     this.id = data.id ?? null;
@@ -44,6 +49,14 @@ export class GameSession {
     this.updatedAt = new Date().toISOString();
   }
 
+  recoverTransientState() {
+    if (RECOVERABLE_SUB_STATES.has(this.subState)) {
+      this.subState = SubState.AWAITING_INPUT;
+      this.pendingDiceFlow = null;
+    }
+    return this;
+  }
+
   toJSON() {
     return {
       id: this.id,
@@ -64,5 +77,14 @@ export class GameSession {
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
+  }
+
+  toClientJSON() {
+    const snapshot = this.toJSON();
+    if (RECOVERABLE_SUB_STATES.has(snapshot.subState)) {
+      snapshot.subState = SubState.AWAITING_INPUT;
+      snapshot.pendingDiceFlow = null;
+    }
+    return snapshot;
   }
 }

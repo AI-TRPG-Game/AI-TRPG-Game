@@ -3,16 +3,23 @@
  * 解析 LLM 返回的 JSON 字符串，提取各字段。
  */
 export class JsonOutputParser {
+  clean(raw) {
+    if (!raw) return '';
+    let text = String(raw).trim();
+    text = text
+      .replace(/^```(?:json)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim();
+    return text.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, '').trim();
+  }
+
   /**
    * @param {string} raw - LLM 返回的原始文本
    * @returns {Object|null} 解析后的 JSON 对象，或 null
    */
   parse(raw) {
     if (!raw) return null;
-    // 尝试提取 JSON 块（处理 LLM 在 JSON 前后附加文字的情况）
-    let text = raw.trim();
-    // 去除 markdown 代码块标识
-    text = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '');
+    const text = this.clean(raw);
     try {
       return JSON.parse(text);
     } catch {

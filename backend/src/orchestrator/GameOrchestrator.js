@@ -62,9 +62,10 @@ export class GameOrchestrator {
     const session = this.getSession(sessionId);
     session.phase = Phase.WORLD_SETTING;
     session.subState = SubState.AWAITING_INPUT;
+    this._pushDisplay(session, 'system', GameConfig.GUIDANCE.WORLD_SETTING);
     this.repository.save(session);
     return {
-      session: session.toJSON(),
+      session: session.toClientJSON(),
       guidance: GameConfig.GUIDANCE.WORLD_SETTING,
     };
   }
@@ -79,9 +80,10 @@ export class GameOrchestrator {
 
     phaseManager.advancePhase(session, 'ENTER_CHARACTER_SETTING');
     session.subState = SubState.AWAITING_INPUT;
+    this._pushDisplay(session, 'system', GameConfig.GUIDANCE.CHARACTER_SETTING);
     this.repository.save(session);
     return {
-      session: session.toJSON(),
+      session: session.toClientJSON(),
       guidance: GameConfig.GUIDANCE.CHARACTER_SETTING,
     };
   }
@@ -95,9 +97,10 @@ export class GameOrchestrator {
     if (!raw) throw new Error('没有可存档的世界观输出');
 
     session.worldSettings = saveExtractor.extractWorldFromRaw(raw);
+    this._pushDisplay(session, 'system', GameConfig.GUIDANCE.WORLD_SAVED);
     this.repository.save(session);
     return {
-      session: session.toJSON(),
+      session: session.toClientJSON(),
       message: GameConfig.GUIDANCE.WORLD_SAVED,
     };
   }
@@ -114,9 +117,10 @@ export class GameOrchestrator {
     if (!raw) throw new Error('没有可存档的主角设定输出');
 
     session.protagonist = saveExtractor.extractCharacterFromRaw(raw);
+    this._pushDisplay(session, 'system', GameConfig.GUIDANCE.CHARACTER_SAVED);
     this.repository.save(session);
     return {
-      session: session.toJSON(),
+      session: session.toClientJSON(),
       message: GameConfig.GUIDANCE.CHARACTER_SAVED,
     };
   }
@@ -124,8 +128,9 @@ export class GameOrchestrator {
   updateProtagonist(sessionId, protagonist) {
     const session = this.getSession(sessionId);
     session.protagonist = protagonist;
+    this._pushDisplay(session, 'system', '主角设定已手动保存。');
     this.repository.save(session);
-    return { session: session.toJSON() };
+    return { session: session.toClientJSON() };
   }
 
   async openStory(sessionId, streamId) {
@@ -146,6 +151,8 @@ export class GameOrchestrator {
     }
     this._pushDisplay(session, 'system', GameConfig.GUIDANCE.STORY_OPENING);
 
+    let completed = false;
+
     try {
       const result = await this._runLlmFlow(
         session,
@@ -154,21 +161,28 @@ export class GameOrchestrator {
         streamId
       );
 
-      if (streamId) {
-        this.streamEmitter.emit(streamId, {
-          type: 'done',
-          session: session.toJSON(),
-          result,
-        });
-      }
-
-      return { session: session.toJSON(), result };
-    } finally {
       session.subState = SubState.AWAITING_INPUT;
       this.repository.save(session);
 
       if (streamId) {
         this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
+        this.streamEmitter.emit(streamId, {
+          type: 'done',
+          session: session.toClientJSON(),
+          result,
+        });
+      }
+
+      completed = true;
+      return { session: session.toClientJSON(), result };
+    } finally {
+      if (!completed) {
+        session.subState = SubState.AWAITING_INPUT;
+        this.repository.save(session);
+
+        if (streamId) {
+          this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
+        }
       }
     }
   }
@@ -189,6 +203,7 @@ export class GameOrchestrator {
     this.repository.save(session);
 
     let diceAwaiting = false;
+    let completed = false;
 
     try {
       let resolvedText = userText;
@@ -243,34 +258,39 @@ export class GameOrchestrator {
           });
           this.streamEmitter.emit(streamId, {
             type: 'done',
-            session: session.toJSON(),
+            session: session.toClientJSON(),
             result,
           });
         }
-        return { session: session.toJSON(), result };
+        return { session: session.toClientJSON(), result };
       }
 
       if (session.phase === Phase.STORY_PLAY && session.chatRecord.length > 0) {
         await this.historySummarizer.checkAndRun(session, streamId);
       }
 
+      session.subState = SubState.AWAITING_INPUT;
+      this.repository.save(session);
+
       if (streamId) {
+        this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
         this.streamEmitter.emit(streamId, {
           type: 'done',
-          session: session.toJSON(),
+          session: session.toClientJSON(),
           result,
         });
       }
 
-      return { session: session.toJSON(), result };
+      completed = true;
+      return { session: session.toClientJSON(), result };
     } finally {
-      if (!diceAwaiting) {
+      if (!diceAwaiting && !completed) {
         session.subState = SubState.AWAITING_INPUT;
-      }
-      this.repository.save(session);
+        this.repository.save(session);
 
-      if (streamId && !diceAwaiting) {
-        this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
+        if (streamId) {
+          this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
+        }
       }
     }
   }
@@ -494,14 +514,16 @@ export class GameOrchestrator {
     }
 
     let diceAwaiting = false;
+    let completed = false;
     try {
       const execResult = await this._executeDice(session, diceNotation, pendingRaw, streamId);
       if (execResult && execResult.branch === 'DICE_AWAITING') {
         diceAwaiting = true;
       }
+      completed = true;
       return execResult;
     } finally {
-      if (!diceAwaiting) {
+      if (!diceAwaiting && !completed) {
         session.pendingDiceFlow = null;
         session.subState = SubState.AWAITING_INPUT;
         this.repository.save(session);
@@ -530,10 +552,11 @@ export class GameOrchestrator {
     session.pendingDiceFlow = null;
     session.subState = SubState.AWAITING_INPUT;
     session.optionBuffer = '';
+    this._pushDisplay(session, 'system', '已取消掷骰判定，请重新选择行动。');
     this.repository.save(session);
 
     return {
-      session: session.toJSON(),
+      session: session.toClientJSON(),
       message: '已取消掷骰判定，请重新选择行动。',
     };
   }
@@ -622,7 +645,7 @@ export class GameOrchestrator {
           });
           this.streamEmitter.emit(streamId, {
             type: 'done',
-            session: session.toJSON(),
+            session: session.toClientJSON(),
             result: diceCheck,
           });
         }
@@ -631,10 +654,15 @@ export class GameOrchestrator {
       result = diceCheck;
     }
 
+    session.pendingDiceFlow = null;
+    session.subState = SubState.AWAITING_INPUT;
+    this.repository.save(session);
+
     if (streamId) {
+      this.streamEmitter.emit(streamId, { type: 'input_lock', locked: false });
       this.streamEmitter.emit(streamId, {
         type: 'done',
-        session: session.toJSON(),
+        session: session.toClientJSON(),
         result,
       });
     }

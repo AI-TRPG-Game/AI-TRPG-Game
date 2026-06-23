@@ -101,6 +101,156 @@
             height: 100%;
         }
 
+        #session-sidebar {
+            width: 252px;
+            flex-shrink: 0;
+            background: linear-gradient(180deg, var(--bg-panel), var(--bg-root));
+            border-right: 1px solid var(--border-subtle);
+            display: flex;
+            flex-direction: column;
+            transition: width var(--transition);
+        }
+        #session-sidebar.collapsed {
+            width: 52px;
+        }
+        #session-sidebar-top {
+            height: 49px;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        #btn-session-toggle,
+        #btn-new-session {
+            border: 1px solid var(--border-normal);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        #btn-session-toggle:hover,
+        #btn-new-session:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+        #btn-session-toggle {
+            width: 34px;
+            height: 32px;
+            border-radius: var(--radius-md);
+            font-size: 18px;
+            line-height: 1;
+        }
+        #session-sidebar-title {
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        #session-sidebar-content {
+            min-width: 0;
+            padding: 12px;
+            overflow: hidden auto;
+        }
+        #session-sidebar.collapsed #session-sidebar-title,
+        #session-sidebar.collapsed #btn-new-session,
+        #session-sidebar.collapsed #session-sidebar-content {
+            display: none;
+        }
+        #btn-new-session {
+            width: 30px;
+            height: 30px;
+            border-radius: var(--radius-md);
+            font-size: 18px;
+            line-height: 1;
+        }
+        #session-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .session-item {
+            width: 100%;
+            padding: 6px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-secondary);
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            transition: all var(--transition);
+        }
+        .session-item:hover {
+            border-color: var(--border-normal);
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .session-item.active {
+            border-color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 12%, var(--bg-card));
+            color: var(--accent-hover);
+        }
+        .session-main {
+            min-width: 0;
+            flex: 1;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
+            font-family: var(--font-sans);
+            padding: 3px 4px;
+        }
+        .session-main:focus-visible,
+        .session-icon-button:focus-visible {
+            outline: 1px solid var(--accent);
+            outline-offset: 2px;
+        }
+        .session-title,
+        .session-meta {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .session-title {
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .session-meta {
+            margin-top: 3px;
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .session-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .session-icon-button {
+            width: 24px;
+            height: 24px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-muted);
+            cursor: pointer;
+            font-size: 13px;
+            line-height: 1;
+            transition: all var(--transition);
+        }
+        .session-icon-button:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
+        .session-icon-button.danger:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+            background: var(--error-bg);
+        }
+
         #main-panel {
             flex: 1;
             display: flex;
@@ -429,6 +579,58 @@
             margin-bottom: 2px;
             font-size: 13px;
         }
+        .sidebar-section-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin: 18px 0 8px;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 6px;
+        }
+        .sidebar-section-head h3 {
+            margin: 0;
+            border-bottom: 0;
+            padding-bottom: 0;
+        }
+        .sidebar-section-head button,
+        .sidebar-item-action {
+            padding: 3px 8px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 11px;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        .sidebar-section-head button {
+            min-width: 32px;
+            margin-top: 0;
+            font-size: 14px;
+            line-height: 1;
+        }
+        .sidebar-item-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 2px;
+        }
+        .sidebar-item-head strong {
+            min-width: 0;
+            margin-bottom: 0;
+        }
+        .sidebar-item-action {
+            flex-shrink: 0;
+            margin-top: 0;
+        }
+        .sidebar-section-head button:hover,
+        .sidebar-item-action:hover {
+            border-color: var(--accent);
+            color: var(--accent-hover);
+        }
         #sidebar button {
             margin-top: 6px;
             padding: 5px 12px;
@@ -444,6 +646,17 @@
         #sidebar button:hover {
             border-color: var(--accent);
             color: var(--accent-hover);
+        }
+        #sidebar .sidebar-section-head button {
+            min-width: 32px;
+            margin-top: 0;
+            padding: 3px 8px;
+            font-size: 14px;
+            line-height: 1;
+        }
+        #sidebar .sidebar-item-action {
+            margin-top: 0;
+            padding: 3px 8px;
         }
 
         /* ── God's Eye Button ── */
@@ -513,10 +726,121 @@
             line-height: 1.45;
             color: var(--text-secondary);
         }
+
+        /* ── NPC Modal ── */
+        #npc-modal-backdrop {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.58);
+            z-index: 20;
+        }
+        #npc-modal-backdrop.open {
+            display: flex;
+        }
+        #npc-modal {
+            width: min(420px, 100%);
+            background: var(--bg-panel);
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+            overflow: hidden;
+        }
+        #npc-modal-header,
+        #npc-modal-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        #npc-modal-header h3 {
+            margin: 0;
+            color: var(--accent);
+            font-size: 13px;
+            letter-spacing: 1px;
+        }
+        #btn-npc-close {
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+        }
+        #npc-form {
+            padding: 14px;
+        }
+        #npc-form label {
+            display: block;
+            margin-bottom: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+        }
+        #npc-form input,
+        #npc-form textarea {
+            width: 100%;
+            margin-top: 6px;
+            padding: 9px 10px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--input-bg);
+            color: var(--input-text);
+            font-family: var(--font-sans);
+            font-size: 13px;
+            outline: none;
+        }
+        #npc-form textarea {
+            min-height: 110px;
+            resize: vertical;
+            line-height: 1.5;
+        }
+        #npc-form input:focus,
+        #npc-form textarea:focus {
+            border-color: var(--accent);
+        }
+        #npc-modal-actions {
+            justify-content: flex-end;
+            border-top: 1px solid var(--border-subtle);
+            border-bottom: 0;
+            padding: 12px 0 0;
+        }
+        #npc-modal-actions button {
+            padding: 7px 14px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-md);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        #npc-modal-actions button[type="submit"] {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #0d0f14;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
     <div id="app">
+        <aside id="session-sidebar" aria-label="会话列表">
+            <div id="session-sidebar-top">
+                <button id="btn-session-toggle" type="button" title="展开/收起会话列表 (Alt+S)" aria-label="展开或收起会话列表" aria-expanded="true">&#9776;</button>
+                <span id="session-sidebar-title">会话</span>
+                <button id="btn-new-session" type="button" title="新建会话" aria-label="新建会话">+</button>
+            </div>
+            <div id="session-sidebar-content">
+                <div id="session-list"></div>
+            </div>
+        </aside>
+
         <div id="main-panel">
             <div id="header">
                 <h2>AI+TRPG</h2>
@@ -551,7 +875,10 @@
             <h3>重要地点</h3>
             <div id="locations-panel"></div>
 
-            <h3>重要 NPC</h3>
+            <div class="sidebar-section-head">
+                <h3>重要 NPC</h3>
+                <button id="btn-add-npc" type="button" title="添加 NPC" aria-label="添加 NPC">+</button>
+            </div>
             <div id="npcs-panel"></div>
 
             <h3>物品仓库</h3>
@@ -564,6 +891,29 @@
                 <button id="btn-godseye-close">&times;</button>
             </div>
             <div id="godseye-content"></div>
+        </div>
+    </div>
+
+    <div id="npc-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="npc-modal-title">
+        <div id="npc-modal">
+            <div id="npc-modal-header">
+                <h3 id="npc-modal-title">添加 NPC</h3>
+                <button id="btn-npc-close" type="button" aria-label="关闭 NPC 编辑窗口">&times;</button>
+            </div>
+            <form id="npc-form">
+                <label>
+                    名称
+                    <input id="npc-name-input" type="text" required maxlength="40">
+                </label>
+                <label>
+                    描述
+                    <textarea id="npc-description-input" required maxlength="800"></textarea>
+                </label>
+                <div id="npc-modal-actions">
+                    <button id="btn-npc-cancel" type="button">取消</button>
+                    <button type="submit">保存</button>
+                </div>
+            </form>
         </div>
     </div>
     <script type="module" src="src/main.js"></script>
