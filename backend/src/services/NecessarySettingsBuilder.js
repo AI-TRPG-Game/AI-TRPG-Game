@@ -33,7 +33,7 @@ export class NecessarySettingsBuilder {
 
     if (session.inventory.length > 0) {
       lines.push(
-        `玩家物品栏：${session.inventory.map((i) => i.name).join('、')}`
+        `玩家物品栏：${session.inventory.map((i) => `${i.name}（${i.description || ''}）`).join('、')}`
       );
     }
 
