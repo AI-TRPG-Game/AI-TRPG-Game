@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "agentation": "^3.0.2",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.1.0"
+  }
+}
