@@ -1,11 +1,16 @@
 {
   "private": true,
   "scripts": {
+    "postinstall": "npm --prefix backend install",
+    "predev:all": "npm run kill-ports",
     "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:all": "concurrently -n \"frontend,backend\" -c \"cyan,green\" --kill-others-on-fail \"npm run dev\" \"npm --prefix backend run dev\"",
+    "kill-ports": "npx -y kill-port 5173 3001",
     "build": "vite build"
   },
   "devDependencies": {
     "agentation": "^3.0.2",
+    "concurrently": "^8.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "vite": "^8.1.0"
