@@ -2,6 +2,11 @@
 
 一个基于大语言模型（LLM）的 **单人 AI 跑团系统**。由 AI 扮演 KP（守秘人），遵循 **CoC 7th（克苏鲁的呼唤第七版）** 规则，为玩家提供高自由度、强沉浸感的互动叙事体验。
 
+## 项目演示
+<img width="2856" height="1535" alt="屏幕截图 2026-06-24 200308" src="https://github.com/user-attachments/assets/52379237-cc16-4c46-988f-227b2c07438d" />
+<img width="2843" height="1514" alt="屏幕截图 2026-06-25 152826" src="https://github.com/user-attachments/assets/a1698ea8-0a4d-454f-b95c-700ad9317dbd" />
+
+
 ## 项目动机
 
 线下跑团组织成本高、传统 RPG 自由度有限、直接和通用 LLM 聊天缺乏规则约束和记忆管理。AI+TRPG 试图弥合「叙事自由度」和「游戏规则感」之间的裂缝，做一个既有灵魂（AI 驱动叙事）、又有骨架（规则引擎、记忆系统、状态管理）的产品。
