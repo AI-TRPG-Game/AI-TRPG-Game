@@ -159,14 +159,11 @@ export class InputAssembler {
     });
 
     // 历史对话（含 userText，handleMessage 已将其写入 chatRecord）
+    // 注意：applyNarrative 已把 narration + options 合并为一条 assistant 消息，
+    //       无需再单独注入 optionBuffer
     const historyMsgs = chatRecordToMessages(session.chatRecord);
     for (const m of historyMsgs) {
       messages.push(m);
-    }
-
-    // option_buffer 作为 assistant 消息（上轮 KP 给出的选项）
-    if (session.optionBuffer) {
-      messages.push({ role: 'assistant', content: session.optionBuffer });
     }
   }
 

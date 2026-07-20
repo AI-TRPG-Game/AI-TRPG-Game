@@ -718,12 +718,23 @@
             padding: 4px 8px;
             margin-bottom: 0;
             font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
         .sidebar-item-row .sidebar-item-action {
             flex-shrink: 0;
             margin-top: 0;
             padding: 2px 6px;
             font-size: 10px;
+        }
+        /* 实体 id 徽章 —— 小灰字显示，便于用户辨识引用编号 */
+        .entity-id-badge {
+            font-size: 10px;
+            opacity: 0.45;
+            font-family: var(--font-mono, 'Cascadia Code', Consolas, monospace);
+            margin-left: auto;
+            flex-shrink: 0;
         }
         .sbb-delete {
             color: var(--danger) !important;
@@ -1143,8 +1154,12 @@
                     <input id="npc-name-input" type="text" required maxlength="40">
                 </label>
                 <label>
-                    描述
+                    基础描述（稳定人设，不会被叙事覆盖）
                     <textarea id="npc-description-input" required maxlength="800"></textarea>
+                </label>
+                <label>
+                    当前状态（可选，留空则不设置）
+                    <input id="npc-state-input" type="text" maxlength="100" placeholder="如：神情紧张、正在擦拭酒杯">
                 </label>
                 <div id="npc-modal-actions">
                     <button id="btn-npc-cancel" type="button">取消</button>

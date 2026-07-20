@@ -12,8 +12,8 @@ import { inputAssembler } from '../services/InputAssembler.js';
 import { jsonOutputParser } from '../services/JsonOutputParser.js';
 import { outputProcessor } from '../services/OutputProcessor.js';
 import { entityUpdater } from '../services/EntityUpdater.js';
+import { idAllocator } from '../services/IdAllocator.js';
 import { saveExtractor } from '../services/SaveExtractor.js';
-import { optionResolver } from '../services/OptionResolver.js';
 import { diceService } from '../services/DiceService.js';
 import { HistorySummarizer } from '../services/HistorySummarizer.js';
 import { FLOW_REQUIRED_FIELD } from '../services/PromptTemplateRegistry.js';
@@ -149,10 +149,25 @@ export class GameOrchestrator {
   /** 按索引更新地点 (index=-1 代表新增) */
   upsertLocation(sessionId, index, data) {
     const session = this.getSession(sessionId);
+    const turn = session.chatRecord?.length ?? 0;
     if (index === -1) {
-      session.locations.push(data);
+      // 新增：分配 id + 时间戳
+      session.locations.push({
+        id: idAllocator.nextLocationId(session),
+        name: data.name || '',
+        description: data.description ?? '',
+        firstSeenAt: turn,
+        lastUpdatedAt: turn,
+      });
     } else if (session.locations[index]) {
-      session.locations[index] = data;
+      // 编辑：保留 id / firstSeenAt，合并字段，刷新 lastUpdatedAt
+      const old = session.locations[index];
+      session.locations[index] = {
+        ...old,
+        name: data.name ?? old.name,
+        description: data.description ?? old.description,
+        lastUpdatedAt: turn,
+      };
     } else {
       throw new Error('地点索引越界');
     }
@@ -169,10 +184,28 @@ export class GameOrchestrator {
   /** 按索引更新 NPC (index=-1 代表新增) */
   upsertNpc(sessionId, index, data) {
     const session = this.getSession(sessionId);
+    const turn = session.chatRecord?.length ?? 0;
     if (index === -1) {
-      session.npcs.push(data);
+      // 新增：分配 npc_100+ id + 时间戳
+      // 兼容前端旧字段：description → baseDescription
+      session.npcs.push({
+        id: idAllocator.nextNewNpcId(session),
+        name: data.name || '',
+        baseDescription: data.baseDescription ?? data.description ?? '',
+        currentState: data.currentState ?? '',
+        firstSeenAt: turn,
+        lastUpdatedAt: turn,
+      });
     } else if (session.npcs[index]) {
-      session.npcs[index] = data;
+      // 编辑：保留 id / firstSeenAt / currentState（除非显式传入），刷新 lastUpdatedAt
+      const old = session.npcs[index];
+      session.npcs[index] = {
+        ...old,
+        name: data.name ?? old.name,
+        baseDescription: data.baseDescription ?? data.description ?? old.baseDescription,
+        currentState: data.currentState ?? old.currentState,
+        lastUpdatedAt: turn,
+      };
     } else {
       throw new Error('NPC 索引越界');
     }
@@ -189,10 +222,25 @@ export class GameOrchestrator {
   /** 按索引更新物品 (index=-1 代表新增) */
   upsertItem(sessionId, index, data) {
     const session = this.getSession(sessionId);
+    const turn = session.chatRecord?.length ?? 0;
     if (index === -1) {
-      session.inventory.push(data);
+      session.inventory.push({
+        id: idAllocator.nextItemId(session),
+        name: data.name || '',
+        status: data.status ?? '已获得',
+        description: data.description ?? '',
+        firstSeenAt: turn,
+        lastUpdatedAt: turn,
+      });
     } else if (session.inventory[index]) {
-      session.inventory[index] = data;
+      const old = session.inventory[index];
+      session.inventory[index] = {
+        ...old,
+        name: data.name ?? old.name,
+        status: data.status ?? old.status,
+        description: data.description ?? old.description,
+        lastUpdatedAt: turn,
+      };
     } else {
       throw new Error('物品索引越界');
     }
@@ -390,14 +438,15 @@ export class GameOrchestrator {
     let completed = false;
 
     try {
-      let resolvedText = userText;
       if (session.phase === Phase.STORY_PLAY) {
-        resolvedText = optionResolver.resolve(userText, session.optionBuffer);
-        this._pushDisplay(session, 'player', resolvedText);
+        // 直接存用户原始输入，不替换选项字母
+        // 理由：上一轮 assistant 消息已包含完整选项内容，LLM 能从历史中看到；
+        //       保留用户原始输入（"选项A" 或自由文本）更符合用户表达习惯
+        this._pushDisplay(session, 'player', userText);
         session.chatRecord.push({
           role: ChatRole.PLAYER,
           type: ChatEntryType.PROMPT,
-          content: resolvedText,
+          content: userText,
           timestamp: new Date().toISOString(),
         });
       } else if (session.phase === Phase.WORLD_SETTING) {

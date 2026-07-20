@@ -15,7 +15,7 @@ import {
 } from '../domain/CharacterCardSchema.js';
 import {
   NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS, DICE,
-  ENTITY_NAME, ENTITY_DESC, ITEM_STATUS,
+  ENTITY_NAME, ENTITY_DESC, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE, ITEM_STATUS,
   DICE_SKILL_NAME, DICE_SKILL_POINT, DICE_NOTATION, DICE_SUCCESS_RATE,
   SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION,
 } from '../domain/NarrativeSchema.js';
@@ -216,7 +216,12 @@ export class TextRefiner {
     const npcList = parsed[NPCS];
     if (Array.isArray(npcList) && npcList.length > 0) {
       for (const n of npcList) {
-        const text = `【NPC】${n[ENTITY_NAME]}：${n[ENTITY_DESC]}`;
+        // NPC 新结构：baseDescription（稳定人设）+ currentState（动态状态）
+        // 兜底 description 字段以兼容旧 LLM 输出
+        const base = n[ENTITY_BASE_DESC] ?? n[ENTITY_DESC] ?? '';
+        const state = n[ENTITY_CURRENT_STATE] ?? '';
+        const descText = state ? `${base}（${state}）` : base;
+        const text = `【NPC】${n[ENTITY_NAME]}：${descText}`;
         metaLines.push(text);
         metaHtml.push(escapeHtml(text));
       }
