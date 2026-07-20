@@ -77,19 +77,23 @@ function renderJsonBot(parsed) {
 
   if (Array.isArray(parsed.locations) && parsed.locations.length > 0) {
     for (const l of parsed.locations) {
-      parts.push(escapeHtml(`【地点】${l.name}：${l.description}`));
+      parts.push(escapeHtml(`【地点】${l.name}：${l.description ?? ''}`));
     }
   }
 
   if (Array.isArray(parsed.npcs) && parsed.npcs.length > 0) {
     for (const n of parsed.npcs) {
-      parts.push(escapeHtml(`【NPC】${n.name}：${n.description}`));
+      // NPC 新结构：baseDescription + currentState；兜底旧 description
+      const base = n.baseDescription ?? n.description ?? '';
+      const state = n.currentState ?? '';
+      const descText = state ? `${base}（${state}）` : base;
+      parts.push(escapeHtml(`【NPC】${n.name}：${descText}`));
     }
   }
 
   if (Array.isArray(parsed.items) && parsed.items.length > 0) {
     for (const i of parsed.items) {
-      parts.push(escapeHtml(`【物品】${i.name}：${i.status || '已获得'}，${i.description}`));
+      parts.push(escapeHtml(`【物品】${i.name}：${i.status || '已获得'}，${i.description ?? ''}`));
     }
   }
 
@@ -150,6 +154,7 @@ export class GameUIController {
     this.npcForm = document.getElementById('npc-form');
     this.npcNameInput = document.getElementById('npc-name-input');
     this.npcDescriptionInput = document.getElementById('npc-description-input');
+    this.npcStateInput = document.getElementById('npc-state-input');
     this.editingNpcIndex = null;
     this.sessionSidebar = document.getElementById('session-sidebar');
     this.sessionToggleButton = document.getElementById('btn-session-toggle');
@@ -818,7 +823,9 @@ export class GameUIController {
 
     this.npcModalTitle.textContent = npc ? '编辑 NPC' : '添加 NPC';
     this.npcNameInput.value = npc?.name || '';
-    this.npcDescriptionInput.value = npc?.description || '';
+    // NPC 新结构：baseDescription（兼容旧 description 字段）
+    this.npcDescriptionInput.value = npc?.baseDescription ?? npc?.description ?? '';
+    this.npcStateInput.value = npc?.currentState ?? '';
     this.npcModalBackdrop.classList.add('open');
     this.npcNameInput.focus();
   }
@@ -832,26 +839,26 @@ export class GameUIController {
   async _saveNpcFromModal() {
     const name = this.npcNameInput.value.trim();
     const description = this.npcDescriptionInput.value.trim();
+    const state = this.npcStateInput.value.trim();
 
     if (!name || !description) {
-      this._appendMessage('NPC 名称和描述都不能为空。', 'error');
+      this._appendMessage('NPC 名称和基础描述都不能为空。', 'error');
       return;
     }
 
-    const npcs = [...(this.session.npcs || [])];
-    const npc = Number.isInteger(this.editingNpcIndex)
-      ? { ...npcs[this.editingNpcIndex], name, description }
-      : { name, description };
-    if (Number.isInteger(this.editingNpcIndex)) {
-      npcs[this.editingNpcIndex] = npc;
-    } else {
-      npcs.push(npc);
+    // 走后端 API：保证 id 分配 / lastUpdatedAt 等字段一致
+    try {
+      const result = await apiClient.upsertNpc(
+        this.session,
+        Number.isInteger(this.editingNpcIndex) ? this.editingNpcIndex : -1,
+        { name, baseDescription: description, currentState: state }
+      );
+      this.session = result.session;
+    } catch (err) {
+      this._appendMessage(`保存 NPC 失败: ${err.message}`, 'error');
+      return;
     }
 
-    this.session = {
-      ...this.session,
-      npcs,
-    };
     this._closeNpcModal();
     this._updateUI();
     await this._persistSession();
@@ -952,27 +959,32 @@ export class GameUIController {
       this.playerEditArea.style.display = 'none';
     }
 
-    // 地点 —— 名称 + 编辑
+    // 地点 —— 名称 + 编辑（按 id 引用，name 编辑后仍可定位）
     this.locationsPanel.innerHTML = (this.session.locations || [])
       .map(
         (l, i) =>
-          `<div class="sidebar-item-row">📍 <span class="sidebar-clickable" data-detail="location" data-location-name="${escapeHtml(l.name)}">${escapeHtml(l.name)}</span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`
+          `<div class="sidebar-item-row">📍 <span class="sidebar-clickable" data-detail="location" data-location-id="${escapeHtml(l.id ?? '')}" title="${escapeHtml(l.id ?? '')}">${escapeHtml(l.name)}<small class="entity-id-badge">${escapeHtml(l.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`
       )
       .join('') + '<button class="sidebar-add-btn" data-add="location">+ 新增地点</button>';
 
-    // NPC —— 名称 + 编辑
+    // NPC —— 名称 + 编辑（按 id 引用）
     this.npcsPanel.innerHTML = (this.session.npcs || [])
       .map(
-        (n, i) =>
-          `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-index="${i}">${escapeHtml(n.name)}</span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`
+        (n, i) => {
+          // 主角/邀请角色标签（基于 id 区段判断）
+          const tag = n.id === 'npc_000' ? '（主角）'
+            : /^npc_00[1-3]$/.test(n.id || '') ? '（已邀请）'
+            : '';
+          return `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-id="${escapeHtml(n.id ?? '')}" title="${escapeHtml(n.id ?? '')}">${escapeHtml(n.name)}${tag ? `<small style="opacity:0.6"> ${tag}</small>` : ''}<small class="entity-id-badge">${escapeHtml(n.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`;
+        }
       )
       .join('') + '<button class="sidebar-add-btn" data-add="npc">+ 新增 NPC</button>';
 
-    // 物品 —— 名称 + 编辑
+    // 物品 —— 名称 + 编辑（按 id 引用）
     this.inventoryPanel.innerHTML = (this.session.inventory || [])
       .map(
         (i, idx) =>
-          `<div class="sidebar-item-row">📦 <span class="sidebar-clickable" data-detail="inventory" data-item-name="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span><button class="sidebar-item-action sbb-edit" data-edit-item="${idx}">✎</button></div>`
+          `<div class="sidebar-item-row">📦 <span class="sidebar-clickable" data-detail="inventory" data-item-id="${escapeHtml(i.id ?? '')}" title="${escapeHtml(i.id ?? '')}">${escapeHtml(i.name)}<small class="entity-id-badge">${escapeHtml(i.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-item="${idx}">✎</button></div>`
       )
       .join('') + '<button class="sidebar-add-btn" data-add="item">+ 新增物品</button>';
 
@@ -1046,24 +1058,30 @@ export class GameUIController {
 
     switch (type) {
       case 'location': {
-        const name = el.dataset.locationName;
-        const loc = (this.session.locations || []).find(l => l.name === name);
+        const id = el.dataset.locationId;
+        const loc = (this.session.locations || []).find(l => l.id === id);
         if (!loc) return;
         title = `地点：${escapeHtml(loc.name)}`;
-        content = this._renderDetailHtml(loc.description);
+        content = this._renderDetailHtml(loc.description ?? '');
         break;
       }
       case 'npc': {
-        const idx = Number(el.dataset.npcIndex);
-        const npc = (this.session.npcs || [])[idx];
+        const id = el.dataset.npcId;
+        const npc = (this.session.npcs || []).find(n => n.id === id);
         if (!npc) return;
         title = `NPC：${escapeHtml(npc.name)}`;
-        content = this._renderDetailHtml(npc.description);
+        // NPC 新结构：baseDescription + currentState（兼容旧 description）
+        {
+          const base = npc.baseDescription ?? npc.description ?? '';
+          const state = npc.currentState ?? '';
+          const body = state ? `${base}\n\n【当前状态】${state}` : base;
+          content = this._renderDetailHtml(body);
+        }
         break;
       }
       case 'inventory': {
-        const name = el.dataset.itemName;
-        const item = (this.session.inventory || []).find(i => i.name === name);
+        const id = el.dataset.itemId;
+        const item = (this.session.inventory || []).find(i => i.id === id);
         if (!item) return;
         title = `物品：${escapeHtml(item.name)}`;
         content = this._renderDetailHtml(
@@ -1189,9 +1207,12 @@ export class GameUIController {
           </div>`;
       }
       case 'npc': {
-        const npc = !isNew ? (this.session.npcs || [])[index] : { name: '', description: '' };
+        // NPC 新结构：name + baseDescription + currentState（兼容旧 description 字段读取）
+        const npc = !isNew ? (this.session.npcs || [])[index] : { name: '', baseDescription: '', currentState: '' };
+        const baseDesc = npc?.baseDescription ?? npc?.description ?? '';
         return `<label>名称 <input id="edit-name" type="text" value="${escapeHtml(npc?.name || '')}"></label>
-          <label>描述 <textarea id="edit-desc" rows="4">${escapeHtml(npc?.description || '')}</textarea></label>
+          <label>基础描述 <textarea id="edit-desc" rows="4">${escapeHtml(baseDesc)}</textarea></label>
+          <label>当前状态 <input id="edit-state" type="text" value="${escapeHtml(npc?.currentState || '')}" placeholder="如：神情紧张、正在擦拭酒杯"></label>
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <button id="detail-panel-save" type="button">保存</button>
             ${isNew ? '' : '<button id="detail-panel-delete" class="sbb-delete" type="button" style="margin-top:0;">删除</button>'}
@@ -1253,8 +1274,9 @@ export class GameUIController {
         }
         case 'npc': {
           const name = document.getElementById('edit-name')?.value ?? '';
-          const desc = document.getElementById('edit-desc')?.value ?? '';
-          result = await apiClient.upsertNpc(this.session, index, { name, description: desc });
+          const baseDescription = document.getElementById('edit-desc')?.value ?? '';
+          const currentState = document.getElementById('edit-state')?.value ?? '';
+          result = await apiClient.upsertNpc(this.session, index, { name, baseDescription, currentState });
           break;
         }
         case 'item': {

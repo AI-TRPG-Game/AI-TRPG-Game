@@ -1,4 +1,16 @@
 /**
+ * @deprecated 已废弃 —— 当前未被任何模块引用。
+ *
+ * 历史背景：原计划用于 DeepSeek 的 response_format 自定义 schema，
+ * 但 DeepSeek API 仅支持 `response_format: { type: 'json_object' }`，
+ * 不支持传入自定义 schema。实际 schema 文本通过 system prompt 注入，
+ * 见 `NarrativeSchema.js`。
+ *
+ * 实体结构已在 v1.4 升级（npcs: id+name+baseDescription+currentState；
+ * locations/items: id+name+description[+status]），本文件的 schema 仍是旧形状，
+ * 不要直接启用——若未来切换到支持 strict schema 的 LLM provider，
+ * 需先同步本文件与 NarrativeSchema.js 的字段定义。
+ *
  * JSON Schema 注册表 —— 定义各 FlowType 的输出 JSON 结构。
  * 通过 response_format: { type: "json_object" } 传入 DeepSeek API。
  */

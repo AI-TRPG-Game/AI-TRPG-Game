@@ -1,17 +1,199 @@
 import { ChatRole, ChatEntryType } from '../domain/enums.js';
 import {
   NARRATION, LOCATIONS, NPCS, ITEMS, HP, SAN, OPTIONS,
-  ENTITY_NAME, ENTITY_DESC, ITEM_STATUS,
+  ENTITY_NAME, ENTITY_DESC, ENTITY_ID, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE, ITEM_STATUS,
 } from '../domain/NarrativeSchema.js';
+import { idAllocator } from './IdAllocator.js';
 
-function upsertByName(list, entry) {
-  const idx = list.findIndex((item) => item.name === entry.name);
-  if (idx >= 0) {
-    list[idx] = { ...list[idx], ...entry };
+// ── 名字归一化与模糊匹配（兜底 LLM 忘填 id 的情况） ──
+
+/**
+ * 名字归一化：trim + 折叠空白 + 去常见尾缀敬称。
+ * 不做全角/半角字母转换（中文场景下中文字符不应被改动）。
+ */
+function normalizeName(name) {
+  if (!name || typeof name !== 'string') return '';
+  let s = name.trim().replace(/\s+/g, '');
+  // 去常见尾缀敬称（中英文）
+  s = s.replace(
+    /(先生|女士|小姐|博士|教授|君|老爷|夫人|老板|老板娘|大叔|大哥|大姐|老哥|同志|师傅|Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.)$/,
+    ''
+  );
+  return s;
+}
+
+/**
+ * 名字模糊匹配：归一化后严格相等优先；其次短包含（长度差 ≤ 2）。
+ * 返回 list 中的下标，未匹配返回 -1。
+ */
+function findByNameFuzzy(list, name) {
+  if (!name) return -1;
+  const target = normalizeName(name);
+  if (!target) return -1;
+
+  // 优先：归一化后严格相等
+  for (let i = 0; i < list.length; i++) {
+    if (normalizeName(list[i]?.name) === target) return i;
+  }
+
+  // 其次：短包含（防止"张"误匹配"张三李四"）
+  if (target.length >= 2) {
+    for (let i = 0; i < list.length; i++) {
+      const candidate = normalizeName(list[i]?.name);
+      if (candidate.length < 2) continue;
+      if (candidate === target) return i; // 已检查过，跳过
+      const diff = Math.abs(candidate.length - target.length);
+      if (diff <= 2 && (candidate.includes(target) || target.includes(candidate))) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+// ── 轮次号（用于 firstSeenAt / lastUpdatedAt） ──
+
+function currentTurn(session) {
+  // 用 chatRecord 长度作为伪轮次号——不严格对应玩家心智中的"第几轮"，
+  // 但足以区分实体先后顺序，满足调试与未来上下文裁剪需求。
+  return session.chatRecord?.length ?? 0;
+}
+
+// ── 实体合并/创建（按 entityType 分支） ──
+
+/**
+ * 合并 entry 到已有实体（不覆盖稳定字段）。
+ * - npc: name/baseDescription 不覆盖；currentState 覆盖
+ * - location/item: name 不覆盖；description 覆盖；item 的 status 覆盖
+ */
+function mergeEntity(existing, entry, entityType) {
+  if (entityType === 'npc') {
+    if (!existing.name && entry.name) existing.name = entry.name;
+    if (!existing.baseDescription && entry.baseDescription) {
+      existing.baseDescription = entry.baseDescription;
+    }
+    if (entry.currentState !== undefined && entry.currentState !== '') {
+      existing.currentState = entry.currentState;
+    }
   } else {
-    list.push(entry);
+    if (!existing.name && entry.name) existing.name = entry.name;
+    if (entry.description !== undefined) existing.description = entry.description;
+    if (entityType === 'item' && entry.status !== undefined) {
+      existing.status = entry.status;
+    }
   }
 }
+
+/** 创建新实体（带 id + firstSeenAt/lastUpdatedAt） */
+function createNewEntity(entry, session, entityType) {
+  const turn = currentTurn(session);
+  if (entityType === 'npc') {
+    return {
+      id: idAllocator.nextNewNpcId(session),
+      name: entry.name || '',
+      baseDescription: entry.baseDescription ?? entry.description ?? '',
+      currentState: entry.currentState ?? '',
+      firstSeenAt: turn,
+      lastUpdatedAt: turn,
+    };
+  }
+  if (entityType === 'location') {
+    return {
+      id: idAllocator.nextLocationId(session),
+      name: entry.name || '',
+      description: entry.description ?? '',
+      firstSeenAt: turn,
+      lastUpdatedAt: turn,
+    };
+  }
+  // item
+  return {
+    id: idAllocator.nextItemId(session),
+    name: entry.name || '',
+    status: entry.status ?? '已获得',
+    description: entry.description ?? '',
+    firstSeenAt: turn,
+    lastUpdatedAt: turn,
+  };
+}
+
+/**
+ * 通用 upsert：按 id 优先匹配，name 模糊兜底，新实体分配 id。
+ * @param {Array} list - session 中的实体列表（已 slice 副本）
+ * @param {Object} entry - LLM 输出的实体（可能含 id、name 等）
+ * @param {Object} session
+ * @param {'npc'|'location'|'item'} entityType
+ */
+function upsertEntity(list, entry, session, entityType) {
+  // 1. 优先按 id 匹配
+  if (entry.id) {
+    const idx = list.findIndex((item) => item.id === entry.id);
+    if (idx >= 0) {
+      mergeEntity(list[idx], entry, entityType);
+      list[idx].lastUpdatedAt = currentTurn(session);
+      return list[idx];
+    }
+    // id 给了但找不到对应条目：LLM 可能误填了不存在的 id
+    // → 走 name 兜底；若 name 也匹配不到，作为新实体（用 LLM 给的 id 推入）
+  }
+
+  // 2. name 模糊兜底（仅当 id 未命中或 id 缺失时）
+  if (entry.name) {
+    const idx = findByNameFuzzy(list, entry.name);
+    if (idx >= 0) {
+      mergeEntity(list[idx], entry, entityType);
+      // 若 LLM 给了 id 且原实体无 id，补上
+      if (entry.id && !list[idx].id) list[idx].id = entry.id;
+      list[idx].lastUpdatedAt = currentTurn(session);
+      return list[idx];
+    }
+  }
+
+  // 3. 新实体
+  const newEntity = createNewEntity(entry, session, entityType);
+  // 若 LLM 显式给了 id（如误填 npc_001 引用不存在的邀请角色），保留其 id
+  // 但要避免与现有 id 冲突
+  if (entry.id && !list.some((item) => item.id === entry.id)) {
+    newEntity.id = entry.id;
+  }
+  list.push(newEntity);
+  return newEntity;
+}
+
+// ── 旧数据一次性迁移（首次进入叙事流程时触发） ──
+
+/**
+ * 给历史 session 中无 id 的实体补 id，给缺字段补默认值。
+ * 直接 mutate session 中的实体列表，幂等。
+ */
+function ensureIdsForExistingEntities(session) {
+  // locations
+  for (const loc of session.locations) {
+    if (!loc.id) loc.id = idAllocator.ensureLocationId(session, loc);
+    if (loc.firstSeenAt === undefined) loc.firstSeenAt = 0;
+    if (loc.lastUpdatedAt === undefined) loc.lastUpdatedAt = 0;
+  }
+  // items
+  for (const item of session.inventory) {
+    if (!item.id) item.id = idAllocator.ensureItemId(session, item);
+    if (item.firstSeenAt === undefined) item.firstSeenAt = 0;
+    if (item.lastUpdatedAt === undefined) item.lastUpdatedAt = 0;
+  }
+  // npcs（需先迁移，因为 ensureNpcId 会动态查询 session.npcs 中已分配的最大编号）
+  for (const npc of session.npcs) {
+    if (!npc.id) npc.id = idAllocator.ensureNpcId(session, npc);
+    // 兼容旧 description 字段：迁移到 baseDescription
+    if (npc.description !== undefined && npc.baseDescription === undefined) {
+      npc.baseDescription = npc.description;
+      delete npc.description;
+    }
+    if (npc.currentState === undefined) npc.currentState = '';
+    if (npc.firstSeenAt === undefined) npc.firstSeenAt = 0;
+    if (npc.lastUpdatedAt === undefined) npc.lastUpdatedAt = 0;
+  }
+}
+
+// ── HP/SAN 更新（与原逻辑一致，未改动） ──
 
 function updatePlayerStats(player, hp, san) {
   let updated = player;
@@ -38,19 +220,29 @@ export class EntityUpdater {
    * @param {string} rawText - 原始 JSON 文本
    */
   applyNarrative(session, parsed, rawText) {
+    // 一次性迁移：给所有旧实体补 id 和缺失字段
+    ensureIdsForExistingEntities(session);
+
     const patch = {
       locations: [...session.locations],
       npcs: [...session.npcs],
       inventory: [...session.inventory],
     };
 
-    // 存储 narration 到 chatRecord
+    // 存储 narration + options 到 chatRecord（合并为一条 assistant 消息）
+    // 理由：options 是 KP 叙述的一部分，不应单开一条消息；
+    //       这样 chatRecord 末尾就是 KP 完整回复（含选项），下一条是用户 prompt，符合对话惯例
     const narration = parsed?.[NARRATION];
+    const opts = parsed?.[OPTIONS];
     if (narration && typeof narration === 'string') {
+      let content = narration;
+      if (Array.isArray(opts) && opts.length > 0) {
+        content += '\n\n【请选择你接下来的行动】\n' + opts.join('\n');
+      }
       session.chatRecord.push({
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
-        content: narration,
+        content,
         timestamp: new Date().toISOString(),
       });
     }
@@ -60,10 +252,16 @@ export class EntityUpdater {
     if (Array.isArray(locs)) {
       for (const loc of locs) {
         if (loc[ENTITY_NAME]) {
-          upsertByName(patch.locations, {
-            name: loc[ENTITY_NAME],
-            description: loc[ENTITY_DESC] || '',
-          });
+          upsertEntity(
+            patch.locations,
+            {
+              id: loc[ENTITY_ID] || null,
+              name: loc[ENTITY_NAME],
+              description: loc[ENTITY_DESC] || '',
+            },
+            session,
+            'location'
+          );
         }
       }
     }
@@ -73,10 +271,17 @@ export class EntityUpdater {
     if (Array.isArray(npcList)) {
       for (const npc of npcList) {
         if (npc[ENTITY_NAME]) {
-          upsertByName(patch.npcs, {
-            name: npc[ENTITY_NAME],
-            description: npc[ENTITY_DESC] || '',
-          });
+          upsertEntity(
+            patch.npcs,
+            {
+              id: npc[ENTITY_ID] || null,
+              name: npc[ENTITY_NAME],
+              baseDescription: npc[ENTITY_BASE_DESC] || '',
+              currentState: npc[ENTITY_CURRENT_STATE] || '',
+            },
+            session,
+            'npc'
+          );
         }
       }
     }
@@ -86,11 +291,17 @@ export class EntityUpdater {
     if (Array.isArray(itemList)) {
       for (const item of itemList) {
         if (item[ENTITY_NAME]) {
-          upsertByName(patch.inventory, {
-            name: item[ENTITY_NAME],
-            status: item[ITEM_STATUS] || '已获得',
-            description: item[ENTITY_DESC] || '',
-          });
+          upsertEntity(
+            patch.inventory,
+            {
+              id: item[ENTITY_ID] || null,
+              name: item[ENTITY_NAME],
+              status: item[ITEM_STATUS] || '已获得',
+              description: item[ENTITY_DESC] || '',
+            },
+            session,
+            'item'
+          );
         }
       }
     }
@@ -110,8 +321,7 @@ export class EntityUpdater {
       session.player = updatePlayerStats(session.player, null, san);
     }
 
-    // options（JSON 数组 → 文本）
-    const opts = parsed?.[OPTIONS];
+    // options（JSON 数组 → 文本）—— 保留 optionBuffer 供前端渲染选项按钮
     if (Array.isArray(opts) && opts.length > 0) {
       session.optionBuffer = opts.join('\n');
     }
