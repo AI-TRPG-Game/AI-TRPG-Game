@@ -148,28 +148,106 @@ export class ApiClient {
   async upsertKeyCharacter(session, index, data) { return this._patchEntity(session, 'key-characters', index, data); }
   async deleteKeyCharacter(session, index) { return this._deleteEntity(session, 'key-characters', index); }
 
-  async openStory(session, handlers) {
-    return this._streamRequest(
-      `${API_BASE}/sessions/${session.id}/open-story`,
-      handlers,
-      { session }
-    );
+  async openStory(session, { onDebug } = {}) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/open-story`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return this._consumeSseStream(res, onDebug);
   }
 
-  async sendMessage(session, text, handlers) {
-    return this._streamRequest(
-      `${API_BASE}/sessions/${session.id}/message`,
-      handlers,
-      { session, text }
-    );
+  async sendMessage(session, text, { onDebug } = {}) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session, text }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return this._consumeSseStream(res, onDebug);
   }
 
-  async confirmDice(session, handlers) {
-    return this._streamRequest(
-      `${API_BASE}/sessions/${session.id}/dice-confirm`,
-      handlers,
-      { session }
-    );
+  async confirmDice(session, { onDebug } = {}) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/dice-confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return this._consumeSseStream(res, onDebug);
+  }
+
+  /**
+   * 消费 SSE 流：解析 event:debug / event:done / event:error 三类事件。
+   * - debug：调用 onDebug(log) 实时推送到 god's eye 面板
+   * - done：resolve 最终结果
+   * - error：reject 错误
+   *
+   * 实现要点：
+   *   - 使用 ReadableStream 逐 chunk 读取，避免一次性缓冲整个响应
+   *   - SSE 事件以 \n\n 分隔，事件内 event:/data: 行用 \n 分隔
+   *   - data 字段可能跨多行（这里后端单行写入，但兼容多行拼接）
+   */
+  async _consumeSseStream(res, onDebug) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult = null;
+    let errorMsg = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE 事件之间以空行（\n\n）分隔
+      let sepIdx;
+      while ((sepIdx = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx + 2);
+
+        const parsed = this._parseSseChunk(chunk);
+        if (!parsed) continue;
+
+        if (parsed.event === 'debug' && onDebug) {
+          try { onDebug(parsed.data); } catch { /* 回调异常不影响流消费 */ }
+        } else if (parsed.event === 'done') {
+          finalResult = parsed.data;
+        } else if (parsed.event === 'error') {
+          errorMsg = parsed.data?.message || '未知错误';
+        }
+      }
+    }
+
+    if (errorMsg) throw new Error(errorMsg);
+    if (!finalResult) throw new Error('SSE 流意外结束：未收到 done 事件');
+    return finalResult;
+  }
+
+  /**
+   * 解析单个 SSE 事件块（不含尾部的 \n\n）。
+   * 返回 { event, data } 或 null（无效块）。
+   */
+  _parseSseChunk(chunk) {
+    if (!chunk) return null;
+    const lines = chunk.split('\n');
+    let event = 'message';
+    let dataStr = '';
+    for (const line of lines) {
+      if (line.startsWith('event:')) {
+        event = line.slice(6).trim();
+      } else if (line.startsWith('data:')) {
+        if (dataStr) dataStr += '\n';
+        dataStr += line.slice(5).trim();
+      }
+    }
+    if (!dataStr) return null;
+    try {
+      return { event, data: JSON.parse(dataStr) };
+    } catch {
+      return { event, data: { raw: dataStr } };
+    }
   }
 
   async cancelDice(session) {
@@ -180,80 +258,6 @@ export class ApiClient {
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return res.json();
-  }
-
-  async _streamRequest(url, handlers, body) {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) throw new Error(await this._errorText(res));
-
-    const { streamId } = await res.json();
-
-    return new Promise((resolve, reject) => {
-      const eventSource = new EventSource(`${API_BASE}/streams/${streamId}`);
-      let botMessageEl = null;
-
-      eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-
-        switch (data.type) {
-          case 'chunk':
-            if (!botMessageEl && handlers.onBotStart) {
-              botMessageEl = handlers.onBotStart();
-            }
-            if (handlers.onChunk) handlers.onChunk(data.content, botMessageEl);
-            break;
-          case 'system':
-            if (handlers.onSystem) handlers.onSystem(data.content);
-            break;
-          case 'input_lock':
-            if (handlers.onInputLock) handlers.onInputLock(data.locked);
-            break;
-          case 'llm_complete':
-            if (handlers.onLlmComplete) handlers.onLlmComplete(data.content);
-            break;
-          case 'retry_clear':
-            botMessageEl = null;
-            if (handlers.onRetryClear) handlers.onRetryClear(data.content);
-            break;
-          case 'dice_confirm':
-            botMessageEl = null;
-            if (handlers.onDiceConfirm) handlers.onDiceConfirm(data.diceNotation);
-            break;
-          case 'bot_break':
-            botMessageEl = null;
-            if (handlers.onBotBreak) handlers.onBotBreak();
-            break;
-          case 'debug_prompt':
-            if (handlers.onDebugPrompt) handlers.onDebugPrompt(data);
-            break;
-          case 'debug_raw':
-            if (handlers.onDebugRaw) handlers.onDebugRaw(data);
-            break;
-          case 'done':
-            if (handlers.onDone) handlers.onDone(data.session, data.result);
-            resolve({ session: data.session, result: data.result });
-            break;
-          case 'error':
-            if (handlers.onError) handlers.onError(data.error);
-            reject(new Error(data.error));
-            break;
-          case 'end':
-            eventSource.close();
-            break;
-          default:
-            break;
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        reject(new Error('SSE connection failed'));
-      };
-    });
   }
 
   async _errorText(res) {

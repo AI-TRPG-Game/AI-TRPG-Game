@@ -1,6 +1,10 @@
 import { FlowType, ChatRole, ChatEntryType } from '../domain/enums.js';
-import { promptTemplateRegistry, FLOW_TEMPERATURE, FLOW_MAX_TOKENS, FLOW_THINKING, FLOW_STOP } from './PromptTemplateRegistry.js';
+import { promptTemplateRegistry, FLOW_TEMPERATURE, FLOW_MAX_TOKENS, FLOW_THINKING, FLOW_REASONING_EFFORT, FLOW_MODEL, FLOW_STOP } from './PromptTemplateRegistry.js';
 import { necessarySettingsBuilder } from './NecessarySettingsBuilder.js';
+import { buildStrictTools } from '../domain/StrictSchemaRegistry.js';
+
+// 注意：思考模式下不支持 tool_choice（DeepSeek API 会返回 400）
+// buildStrictTools 返回的 toolChoice 字段已废弃，不再透传给 Provider
 
 /**
  * 将 chatRecord 条目映射为 API messages（assistant / user 交替）。
@@ -8,8 +12,21 @@ import { necessarySettingsBuilder } from './NecessarySettingsBuilder.js';
  * - player → user
  * - system → user（投掷结果等系统消息，对 LLM 而言是"需要回应的输入"）
  * - summary → assistant
+ *
+ * 重要：DeepSeek 官方要求"思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content"
+ * 因此 kp 角色的 assistant 消息会注入 session.recentReasoningContents 中对应的思维链
+ *
+ * 匹配策略：按 kp 出现顺序与 reasoningContents 队列顺序一一对应（FIFO）
+ * —— 不再用时间容忍度匹配。原因：
+ *   1. 时间戳在多轮调用、网络延迟、本地时钟漂移下不可靠，曾出现 ±60s 内匹配错位
+ *   2. recentReasoningContents 由 GameOrchestrator 在每次 LLM 调用完成后按顺序推入，
+ *      chatRecord 中的 kp 条目也按调用顺序写入，二者天然 FIFO 对应
+ *   3. FIFO 简单可靠，无需任何时间容忍度
  */
-function chatRecordToMessages(chatRecord) {
+function chatRecordToMessages(chatRecord, reasoningContents = []) {
+  const reasoningQueue = [...reasoningContents]; // 不再排序，直接按 push 顺序 FIFO
+  let reasoningIdx = 0;
+
   const messages = [];
   for (const entry of chatRecord) {
     if (entry.type === ChatEntryType.RAW) continue; // raw 兜底不参与正常传播
@@ -21,7 +38,17 @@ function chatRecordToMessages(chatRecord) {
     } else {
       role = 'assistant'; // kp / summary
     }
-    messages.push({ role, content: entry.content });
+
+    const msg = { role, content: entry.content };
+
+    // kp 角色的 assistant 消息：按 FIFO 顺序匹配 reasoning_content
+    // 官方要求：工具调用场景下，所有 assistant 消息必须携带 reasoning_content
+    if (entry.role === ChatRole.KP && reasoningIdx < reasoningQueue.length) {
+      msg.reasoning_content = reasoningQueue[reasoningIdx].reasoningContent;
+      reasoningIdx++;
+    }
+
+    messages.push(msg);
   }
   return messages;
 }
@@ -37,6 +64,9 @@ export class InputAssembler {
 
     const messages = [{ role: 'system', content: template.systemInstruction }];
 
+    // 思考模式 + 工具调用场景下，回传 reasoning_content（官方要求）
+    const reasoningContents = session.recentReasoningContents || [];
+
     switch (flowType) {
       case FlowType.WORLD_GEN:
         this._buildWorldGenMessages(messages, session, userText);
@@ -51,17 +81,22 @@ export class InputAssembler {
         this._buildStoryOpeningMessages(messages, session);
         break;
       case FlowType.NARRATION_I:
-        this._buildNarrationIMessages(messages, session, userText);
+        this._buildNarrationIMessages(messages, session, userText, reasoningContents);
         break;
       case FlowType.NARRATION_II:
-        this._buildNarrationIIMessages(messages, session);
+        this._buildNarrationIIMessages(messages, session, reasoningContents);
         break;
       case FlowType.HISTORY_SUMMARY:
-        this._buildHistorySummaryMessages(messages, session);
+        this._buildHistorySummaryMessages(messages, session, reasoningContents);
         break;
       default:
         throw new Error(`Unsupported flow type: ${flowType}`);
     }
+
+    // strict 模式：注入 tools + toolChoice
+    // 官方文档：思考模式下不支持 tool_choice（API 400）
+    // 因此 toolChoice 在思考模式下由 Provider 过滤掉
+    const { tools, toolChoice } = buildStrictTools(flowType);
 
     return {
       messages,
@@ -69,7 +104,11 @@ export class InputAssembler {
       temperature: FLOW_TEMPERATURE[flowType] ?? 0.7,
       maxTokens: FLOW_MAX_TOKENS[flowType] ?? 4096,
       thinking: FLOW_THINKING[flowType] ?? false,
+      reasoningEffort: FLOW_REASONING_EFFORT[flowType] || null,  // 思考强度
+      modelOverride: FLOW_MODEL[flowType] || null,                // 分层模型路由（null 表示用默认）
       stop: FLOW_STOP[flowType] ?? null,
+      tools,
+      toolChoice,
     };
   }
 
@@ -151,7 +190,7 @@ export class InputAssembler {
   }
 
   // ── 叙述I ──
-  _buildNarrationIMessages(messages, session, userText) {
+  _buildNarrationIMessages(messages, session, userText, reasoningContents = []) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
@@ -161,14 +200,15 @@ export class InputAssembler {
     // 历史对话（含 userText，handleMessage 已将其写入 chatRecord）
     // 注意：applyNarrative 已把 narration + options 合并为一条 assistant 消息，
     //       无需再单独注入 optionBuffer
-    const historyMsgs = chatRecordToMessages(session.chatRecord);
+    // 关键修复：思考模式 + 工具调用场景下，kp assistant 消息必须回传 reasoning_content
+    const historyMsgs = chatRecordToMessages(session.chatRecord, reasoningContents);
     for (const m of historyMsgs) {
       messages.push(m);
     }
   }
 
   // ── 叙述II ──
-  _buildNarrationIIMessages(messages, session) {
+  _buildNarrationIIMessages(messages, session, reasoningContents = []) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
@@ -176,7 +216,7 @@ export class InputAssembler {
     });
 
     // 历史对话（含 dice 消息和系统投掷结果）
-    const historyMsgs = chatRecordToMessages(session.chatRecord);
+    const historyMsgs = chatRecordToMessages(session.chatRecord, reasoningContents);
     for (const m of historyMsgs) {
       messages.push(m);
     }
@@ -192,7 +232,7 @@ export class InputAssembler {
   }
 
   // ── 历史总结 ──
-  _buildHistorySummaryMessages(messages, session) {
+  _buildHistorySummaryMessages(messages, session, reasoningContents = []) {
     // 必要设定
     const settings = necessarySettingsBuilder.build(session);
     messages.push({ role: 'user', content: settings });
@@ -200,7 +240,7 @@ export class InputAssembler {
     // 历史对话（除最新两条外）
     const summaryRecords = session.chatRecord.slice(0, -2);
     if (summaryRecords.length > 0) {
-      const historyMsgs = chatRecordToMessages(summaryRecords);
+      const historyMsgs = chatRecordToMessages(summaryRecords, reasoningContents);
       for (const m of historyMsgs) {
         messages.push(m);
       }

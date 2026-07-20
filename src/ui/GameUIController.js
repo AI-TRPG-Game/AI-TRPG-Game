@@ -130,7 +130,6 @@ export class GameUIController {
     this.inputLocked = false;
     this._botEl = null;
     this._waitingEl = null;
-    this._botText = '';
     this._dicePendingBotEl = null;   // dice 确认阶段的 bot 气泡引用
     this._diceConfirmEl = null;
 
@@ -349,7 +348,6 @@ export class GameUIController {
     this.selectedOptions.clear();
     this._botEl = null;
     this._waitingEl = null;
-    this._botText = '';
     this._dicePendingBotEl = null;
     this._removeDiceConfirm();
     this._restoreUI();
@@ -486,64 +484,49 @@ export class GameUIController {
   }
 
   // ── Handler 构件 ──
-  _makeHandlers() {
-    return {
-      onBotStart: () => {
-        this._botEl = this._appendMessage('', 'bot');
-        this._botText = '';
-        this._clearWaiting();
-        return this._botEl;
-      },
-      onChunk: (chunk, el) => {
-        this._clearWaiting();
-        this._botText += chunk;
-        if (el) {
-          // 用 innerHTML 渲染以支持换行；先转义 HTML，再将 \n 转为 <br>
-          el.innerHTML = escapeHtml(this._botText).replace(/\n/g, '<br>');
-        }
-        this._scrollToBottom();
-      },
-      onLlmComplete: (html) => {
-        this._clearWaiting();
-        if (this._botEl) {
-          this._botEl.innerHTML = html;
-        } else {
-          this._botEl = this._appendMessage('', 'bot');
-          this._botEl.innerHTML = html;
-        }
-        this._botText = html;
-      },
-      onSystem: (content) => this._appendMessage(content, 'system'),
-      onInputLock: (locked) => this._setInputLocked(locked),
-      onRetryClear: (content) => {
-        // 清除无效 bot 气泡，替换为系统提示
-        if (this._botEl) {
-          this._botEl.remove();
-          this._botEl = null;
-          this._botText = '';
-        }
-        this._appendMessage(content, 'system');
-      },
-      onDiceConfirm: (diceNotation) => {
-        this._clearWaiting();
+  // v2.1 SSE 改造：3 个 LLM 路由（/message /open-story /dice-confirm）改为 SSE 流式响应。
+  // 后端在 LLM 调用过程中实时推送 event:debug 事件，前端通过 onDebug 回调立即渲染到 god's eye 面板。
+  // 整个回合完成后推送 event:done，前端调用 _renderLlmResponse 渲染最终结果。
+  // 因此 _renderLlmResponse 不再处理 result.debugLogs（已实时渲染），避免重复。
+
+  /**
+   * 统一渲染 LLM 调用结果（done 事件触发）。
+   * @param {Object} resp - 后端返回 { session, result, systemMessages?, diceNotation? }
+   * @param {Object} opts - { isDiceBranch: 是否 dice 分支（保留 dicePendingBotEl） }
+   */
+  _renderLlmResponse(resp, opts = {}) {
+    const { result, systemMessages } = resp;
+    this.session = resp.session;
+
+    // 1. 渲染 system 消息（如 dice 系统提示、故事开幕提示等）
+    if (Array.isArray(systemMessages)) {
+      for (const sys of systemMessages) {
+        this._appendMessage(sys, 'system');
+      }
+    }
+
+    // 2. 渲染 bot 消息（refined HTML 一次性显示）
+    if (result?.refinedHtml) {
+      // 若有等待中的 dice bot 气泡，先保留引用再清空
+      if (opts.isDiceBranch && this._botEl) {
         this._dicePendingBotEl = this._botEl;
-        this._botEl = null;
-        this._botText = '';
+      }
+      this._botEl = this._appendMessage('', 'bot');
+      this._botEl.innerHTML = result.refinedHtml;
+      this._scrollToBottom();
+    }
+
+    // 3. debug 日志已通过 onDebug 回调实时渲染到 god's eye 面板，这里不再处理 result.debugLogs
+
+    // 4. dice 确认弹窗
+    if (result?.branch === 'DICE_AWAITING' || resp.diceNotation) {
+      const diceNotation = resp.diceNotation || result?.diceNotation;
+      if (diceNotation) {
         this._renderDiceConfirm(diceNotation);
-      },
-      onBotBreak: () => {
-        this._botEl = null;
-        this._botText = '';
-      },
-      onDebugPrompt: (data) => this._appendDebugPanel(data),
-      onDebugRaw: (data) => this._appendDebugPanel(data),
-      onError: (msg) => this._appendMessage(msg, 'error'),
-      onDone: (s) => {
-        this.session = s;
-        this._updateUI();
-        this._persistSession();
-      },
-    };
+      }
+    }
+
+    this._updateUI();
   }
 
   // ── 等待提示 ──
@@ -601,12 +584,10 @@ export class GameUIController {
     this._showWaiting();
 
     try {
-      const { session } = await apiClient.confirmDice(
-        this.session,
-        this._makeHandlers()
-      );
-      this.session = session;
-      this._updateUI();
+      const resp = await apiClient.confirmDice(this.session, {
+        onDebug: (log) => this._appendDebugPanel(log),
+      });
+      this._renderLlmResponse(resp, { isDiceBranch: true });
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`错误: ${err.message}`, 'error');
@@ -630,7 +611,6 @@ export class GameUIController {
         this._dicePendingBotEl = null;
       }
       this._botEl = null;
-      this._botText = '';
       this._appendMessage(result.message, 'system');
       this._updateUI();
       await this._persistSession();
@@ -655,13 +635,10 @@ export class GameUIController {
     this._showWaiting();
 
     try {
-      const { session } = await apiClient.sendMessage(
-        this.session,
-        text,
-        this._makeHandlers()
-      );
-      this.session = session;
-      this._updateUI();
+      const resp = await apiClient.sendMessage(this.session, text, {
+        onDebug: (log) => this._appendDebugPanel(log),
+      });
+      this._renderLlmResponse(resp);
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`错误: ${err.message}`, 'error');
@@ -690,12 +667,10 @@ export class GameUIController {
     document.getElementById('btn-open-story').disabled = true;
 
     try {
-      const { session } = await apiClient.openStory(
-        this.session,
-        this._makeHandlers()
-      );
-      this.session = session;
-      this._updateUI();
+      const resp = await apiClient.openStory(this.session, {
+        onDebug: (log) => this._appendDebugPanel(log),
+      });
+      this._renderLlmResponse(resp);
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`故事开幕失败: ${err.message}`, 'error');
@@ -801,13 +776,12 @@ export class GameUIController {
     this._showWaiting();
 
     try {
-      const { session } = await apiClient.sendMessage(
+      const resp = await apiClient.sendMessage(
         this.session,
         '根据世界观生成一个合理角色',
-        this._makeHandlers()
+        { onDebug: (log) => this._appendDebugPanel(log) }
       );
-      this.session = session;
-      this._updateUI();
+      this._renderLlmResponse(resp);
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`AI生成角色失败: ${err.message}`, 'error');
@@ -909,9 +883,10 @@ export class GameUIController {
             : 'bot';
       const el = this._appendMessage('', type);
       if (type === 'bot') {
-        // 新格式：refined HTML 以 '<' 开头；旧格式：raw JSON/XML
+        // 新格式：refined HTML 由后端 TextRefiner 统一以 '<div class="kp-block">' 开头
+        // 旧格式：raw JSON / XML（<narration>...</narration>）走 renderBotContent 解析
         const content = entry.content || '';
-        if (content.trim().startsWith('<')) {
+        if (content.trim().startsWith('<div')) {
           el.innerHTML = content;
         } else {
           el.innerHTML = renderBotContent(content);
@@ -1490,6 +1465,8 @@ export class GameUIController {
 
   _appendDebugPanel(data) {
     const isPrompt = data.type === 'debug_prompt';
+    const isRaw = data.type === 'debug_raw';
+    const isSystem = data.type === 'system' || data.type === 'retry_clear' || data.type === 'parse_fail';
     const container = document.createElement('div');
     container.style.cssText =
       'margin-bottom:10px;border:1px solid #2a2f40;border-radius:6px;overflow:hidden;';
@@ -1498,11 +1475,21 @@ export class GameUIController {
     const flowLabel = data.flowType || '?';
     const attemptLabel = data.attempt > 1 ? ` 重试#${data.attempt}` : '';
     header.style.cssText = 'padding:4px 10px;font-size:11px;font-weight:600;';
-    header.style.background = isPrompt ? '#1a2818' : '#2a1c1c';
-    header.style.color = isPrompt ? '#7ab87a' : '#c97a7a';
-    header.textContent = isPrompt
-      ? `↑ REQUEST [${flowLabel}]${attemptLabel}`
-      : `↓ RESPONSE [${flowLabel}]${attemptLabel}`;
+    if (isPrompt) {
+      header.style.background = '#1a2818';
+      header.style.color = '#7ab87a';
+      header.textContent = `↑ REQUEST [${flowLabel}]${attemptLabel}`;
+    } else if (isRaw) {
+      header.style.background = '#2a1c1c';
+      header.style.color = '#c97a7a';
+      header.textContent = `↓ RESPONSE [${flowLabel}]${attemptLabel}`;
+    } else {
+      // system / retry_clear / parse_fail
+      header.style.background = '#3a2e1a';
+      header.style.color = '#d8b75a';
+      const tag = data.type === 'parse_fail' ? 'PARSE FAIL' : data.type === 'retry_clear' ? 'RETRY' : 'SYSTEM';
+      header.textContent = `! ${tag} [${flowLabel}]${attemptLabel}`;
+    }
     container.appendChild(header);
 
     const body = document.createElement('div');
