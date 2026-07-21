@@ -1,31 +1,40 @@
 import { FlowType, ChatRole, ChatEntryType } from '../domain/enums.js';
 import { promptTemplateRegistry, FLOW_TEMPERATURE, FLOW_MAX_TOKENS, FLOW_THINKING, FLOW_REASONING_EFFORT, FLOW_MODEL, FLOW_STOP } from './PromptTemplateRegistry.js';
 import { necessarySettingsBuilder } from './NecessarySettingsBuilder.js';
-import { buildStrictTools } from '../domain/StrictSchemaRegistry.js';
+import { buildStrictTools, FLOW_FUNCTION_NAMES } from '../domain/StrictSchemaRegistry.js';
 
 // 注意：思考模式下不支持 tool_choice（DeepSeek API 会返回 400）
 // buildStrictTools 返回的 toolChoice 字段已废弃，不再透传给 Provider
 
 /**
  * 将 chatRecord 条目映射为 API messages（assistant / user 交替）。
- * - kp → assistant（若有 parsed，content 用 JSON 字符串保留结构化格式，强化 LLM 格式一致性引导）
+ * - kp → assistant（若有 parsed + flowType，构造 tool_calls + tool 消息对，模拟真实 LLM 输出格式）
  * - player → user
  * - system → user（投掷结果等系统消息，对 LLM 而言是"需要回应的输入"）
  * - summary → assistant
  *
- * 设计决策：历史 KP 消息用 content=JSON 字符串，不用 tool_calls 结构。
- *   早期方案 B 曾用 tool_calls + tool 消息对，但导致跨 flowType 的函数名不一致问题
- *   （STORY_OPENING 引用 output_story_opening，但 NARRATION_I 的 tools 列表只有 output_narration_i），
- *   DeepSeek API 可能丢弃引用不存在函数名的 tool_calls 消息，导致 STORY_OPENING 内容丢失。
- *   改用 content=JSON 字符串：LLM 仍能看到结构化 JSON 格式的历史消息，强化格式引导，
- *   且不触发 tool_calls 的函数名校验，对所有 flowType 都兼容。
+ * 方案 B+ 改造：KP 消息若携带 parsed + flowType，则构造为：
+ *   {role: assistant, content: null, reasoning_content: ..., tool_calls: [{id, type: 'function', function: {name, arguments: JSON}}]}
+ *   {role: tool, tool_call_id: id, content: ''}
+ * 这样 LLM 看到的历史 assistant 消息格式 = strict 模式要求它输出的格式，
+ * 强化格式一致性引导，减少"LLM 不调 function 直接输出文本"的概率。
+ *
+ * 跨 flowType 兼容性：方案 B+ 已把函数名统一到 4 个
+ *   （output_world / output_character / output_narration / output_summary），
+ *   STORY_OPENING / NARRATION_I / NARRATION_II 共用 output_narration，
+ *   历史消息的函数名始终在当前请求的 tools 列表中找到，避免 API 兼容性问题。
+ *
+ * 无 parsed 的 KP 条目（旧数据 / pendingBracket 片段）退化为 content=文本。
  *
  * 重要：DeepSeek 官方要求"思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content"
+ * reasoning_content 注入到 assistant 消息（tool_calls 同一条），不注入 tool 消息。
+ *
  * reasoning_content 匹配策略：按 kp 出现顺序与 reasoningContents 队列顺序一一对应（FIFO）
  */
 function chatRecordToMessages(chatRecord, reasoningContents = []) {
   const reasoningQueue = [...reasoningContents]; // 按 push 顺序 FIFO
   let reasoningIdx = 0;
+  let toolCallCounter = 0;
 
   const messages = [];
   for (const entry of chatRecord) {
@@ -39,18 +48,47 @@ function chatRecordToMessages(chatRecord, reasoningContents = []) {
       role = 'assistant'; // kp / summary
     }
 
-    // KP 消息携带 parsed 对象时，content 用 JSON 字符串（保留结构化格式，强化 LLM 格式引导）
-    // 无 parsed 的 KP 条目（旧数据 / pendingBracket 片段）退化为原始 content 文本
-    let content = entry.content;
+    // 方案 B+：KP 消息携带 parsed + flowType 时，构造 tool_calls + tool 消息对
     if (
       entry.role === ChatRole.KP &&
       entry.parsed &&
-      typeof entry.parsed === 'object'
+      typeof entry.parsed === 'object' &&
+      entry.flowType &&
+      FLOW_FUNCTION_NAMES[entry.flowType]
     ) {
-      content = JSON.stringify(entry.parsed);
+      const toolCallId = `call_${Date.now()}_${++toolCallCounter}`;
+      const functionName = FLOW_FUNCTION_NAMES[entry.flowType];
+      const argumentsJson = JSON.stringify(entry.parsed);
+
+      const assistantMsg = {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: toolCallId,
+          type: 'function',
+          function: { name: functionName, arguments: argumentsJson },
+        }],
+      };
+
+      // 注入 reasoning_content（FIFO 匹配，与改造前一致）
+      if (reasoningIdx < reasoningQueue.length) {
+        assistantMsg.reasoning_content = reasoningQueue[reasoningIdx].reasoningContent;
+        reasoningIdx++;
+      }
+
+      messages.push(assistantMsg);
+      // tool_calls 后必须跟 tool 消息（OpenAI/DeepSeek 规范）
+      // content 放空字符串最省 token，LLM 会理解为"工具执行完成"
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCallId,
+        content: '',
+      });
+      continue;
     }
 
-    const msg = { role, content };
+    // 兜底：无 parsed 的 KP / SUMMARY / 旧数据 → content=文本
+    const msg = { role, content: entry.content };
 
     // kp 角色的 assistant 消息：按 FIFO 顺序匹配 reasoning_content
     if (entry.role === ChatRole.KP && reasoningIdx < reasoningQueue.length) {

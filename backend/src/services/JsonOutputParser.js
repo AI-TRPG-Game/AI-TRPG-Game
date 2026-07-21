@@ -14,7 +14,7 @@
  *   - 字符串值内输出未转义双引号（strict schema 校验不到的细节错误）
  */
 import { hasCardKey } from '../domain/CharacterCardSchema.js';
-import { hasDiceField, NARRATION, SUMMARY, WORLD_IMPRESSION } from '../domain/NarrativeSchema.js';
+import { hasDiceField, NARRATION, SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION } from '../domain/NarrativeSchema.js';
 
 const THINK_OPEN_TAG = '<' + 'think>';
 const THINK_CLOSE_TAG = '<' + '/think>';
@@ -222,9 +222,16 @@ export class JsonOutputParser {
     return !!(parsed && typeof parsed[SUMMARY] === 'string' && parsed[SUMMARY].trim());
   }
 
-  /** 检测是否包含 world_impression 字段 */
+  /**
+   * 检测是否包含可存档的世界观字段
+   * 优先校验 key_description（存档目标字段），兜底 world_impression
+   * 设计动机：SaveExtractor 存档时返回 key_description || world_impression，
+   *          所以两者任一存在即可存档；但 key_description 是首选
+   */
   hasWorldDescription(parsed) {
-    return !!(parsed && typeof parsed[WORLD_IMPRESSION] === 'string' && parsed[WORLD_IMPRESSION].trim());
+    const hasKey = !!(parsed && typeof parsed[KEY_DESCRIPTION] === 'string' && parsed[KEY_DESCRIPTION].trim());
+    const hasImpression = !!(parsed && typeof parsed[WORLD_IMPRESSION] === 'string' && parsed[WORLD_IMPRESSION].trim());
+    return hasKey || hasImpression;
   }
 
   /** 检测是否包含 角色档案 字段 */

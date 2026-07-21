@@ -12,9 +12,10 @@ export class SaveExtractor {
   extractWorldFromRaw(raw) {
     const parsed = jsonOutputParser.parse(raw);
     if (!parsed || !jsonOutputParser.hasWorldDescription(parsed)) {
-      throw new Error(`未找到 ${WORLD_IMPRESSION} 字段，无法存档世界观`);
+      throw new Error(`未找到 ${KEY_DESCRIPTION} 字段，无法存档世界观`);
     }
     // 存档 key_description（200字摘要），后续阶段只会发送这个
+    // 兜底：若 LLM 偶尔没输出 key_description 但输出了 world_impression，用 world_impression
     return parsed[KEY_DESCRIPTION] || parsed[WORLD_IMPRESSION];
   }
 

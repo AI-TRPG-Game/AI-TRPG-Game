@@ -579,9 +579,23 @@ export class GameOrchestrator {
         flowType,
         attempt: attemptNum,
         systemInstruction: assembledPrompt.messages[0]?.content || '',
-        userContent: assembledPrompt.messages.slice(1).map(m =>
-          `[${m.role}] ${m.content}`
-        ).join('\n'),
+        // 方案 B+：消息可能含 tool_calls 结构，需要正确渲染
+        // - tool_calls 消息：content=null，但有 tool_calls 字段 → 显示函数名 + arguments
+        // - tool 消息：tool_call_id + content（通常为空）→ 显示 tool_call_id
+        // - 普通消息：直接显示 content
+        userContent: assembledPrompt.messages.slice(1).map(m => {
+          if (m.tool_calls) {
+            const tc = m.tool_calls[0];
+            const argsPreview = tc.function.arguments.length > 200
+              ? tc.function.arguments.slice(0, 200) + '...(' + tc.function.arguments.length + ' chars)'
+              : tc.function.arguments;
+            return `[${m.role}] tool_calls: ${tc.function.name}(${argsPreview})`;
+          }
+          if (m.tool_call_id) {
+            return `[${m.role}] tool_call_id=${m.tool_call_id}, content=${JSON.stringify(m.content)}`;
+          }
+          return `[${m.role}] ${m.content}`;
+        }).join('\n'),
       });
 
       // 重试策略（简化版）：所有调用统一使用思考模式 + reasoning_effort='high'
@@ -621,6 +635,12 @@ export class GameOrchestrator {
         });
       }
 
+      // 保存诊断信息到闭包变量，供 tryRefine 在解析失败时使用
+      lastDiagnostic = {
+        finishReason: result._diagnostic?.finishReason || result.finishReason || 'unknown',
+        hasToolCall: result.hasToolCall,
+      };
+
       this._pushDebug(debugLogs, onDebug, {
         type: 'debug_raw',
         flowType,
@@ -638,6 +658,7 @@ export class GameOrchestrator {
     }
 
     let raw = await doCall(assembled);
+    let lastDiagnostic = null; // 保存最近一次 doCall 的诊断信息（finish_reason 等）
 
     const tryRefine = async (rawText) => {
       const parsed = jsonOutputParser.parse(rawText);
@@ -645,16 +666,22 @@ export class GameOrchestrator {
         const refined = textRefiner.refine(flowType, parsed);
         return { ok: true, raw: rawText, refinedHtml: refined.html };
       }
-      // 记录详细诊断信息：raw 内容 + 字段名 + 字段值类型
+      // 记录详细诊断信息：raw 内容 + 字段名 + 字段值类型 + 尾部内容 + finish_reason
       // 用于排查"LLM 看起来按格式输出但系统判错"的场景
+      //   - raw 尾部 200 字符：判断是否被截断（未闭合的 JSON）
+      //   - finish_reason：'length' 表示 max_tokens 不足，'stop' 表示正常结束
+      //   - hasToolCall：false 表示 strict 失效，走 content 兜底（content 可能不完整）
       const rawLen = (rawText || '').length;
       const rawHead = (rawText || '').slice(0, 500);
+      const rawTail = (rawText || '').slice(-200);
+      const finishReason = lastDiagnostic?.finishReason || 'unknown';
+      const hasToolCall = lastDiagnostic?.hasToolCall ? 'yes' : 'no';
       if (!parsed) {
         this._pushDebug(debugLogs, onDebug, {
           type: 'parse_fail',
           flowType,
           attempt: attemptNum,
-          content: `JSON 解析失败。raw 长度=${rawLen}\n【raw 前 500 字符】\n${rawHead}`,
+          content: `JSON 解析失败。raw 长度=${rawLen} | finish_reason=${finishReason} | hasToolCall=${hasToolCall}\n【raw 前 500 字符】\n${rawHead}\n【raw 尾部 200 字符】\n${rawTail}`,
         });
       } else {
         const fields = Object.keys(parsed);

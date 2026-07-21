@@ -201,26 +201,16 @@ export function buildCharacterGenStrictSchema() {
   };
 }
 
-/** STORY_OPENING —— 无 dice/hp/san，实体通常首次出场（id=null） */
-export function buildStoryOpeningStrictSchema() {
-  return {
-    type: 'object',
-    properties: {
-      [NARRATION]: { type: 'string', description: '开幕叙述文本' },
-      [LOCATIONS]: { type: 'array', items: locationItemSchema },
-      [NPCS]: { type: 'array', items: npcItemSchema },
-      [ITEMS]: { type: 'array', items: itemItemSchema },
-      [OPTIONS]: optionsSchema,
-    },
-    required: [NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS],
-    additionalProperties: false,
-  };
-}
-
 /**
- * NARRATION_I / NARRATION_II —— 超集 schema（方案A）
+ * 叙事超集 schema —— STORY_OPENING / NARRATION_I / NARRATION_II 共用
+ *
+ * 统一动机：原 STORY_OPENING 缺少 hp/san/dice 字段，与 NARRATION 格式不一致；
+ *          统一后历史 assistant 消息可跨 flowType 复用 tool_calls 结构（方案 B+），
+ *          且 STORY_OPENING 的 hp/san/dice 填 null 不影响语义（开幕无判定、无 HP/SAN 变化）。
+ *
  * 格式A（无判定，正常推进）：dice 字段为 null，options 为 4 个字符串数组
  * 格式B（有判定，触发掷骰）：dice 字段填对象，options 为 null（用户先决定是否掷骰，不需要选项）
+ * STORY_OPENING 场景：dice 为 null，hp/san 为 null，options 为 4 个字符串数组
  */
 export function buildNarrationStrictSchema() {
   return {
@@ -258,15 +248,20 @@ export function buildSummaryStrictSchema() {
 // FlowType → schema 映射 + function name
 // ════════════════════════════════════════
 
-// FlowType → function name 映射
+// FlowType → function name 映射（方案 B+：统一到 4 个函数名）
+// 设计动机：跨 flowType 的历史 tool_calls 消息引用的函数名必须在当前请求的 tools 列表中存在。
+//          原 7 个函数名会导致 STORY_OPENING 历史消息引用 output_story_opening，
+//          而 NARRATION_I 请求的 tools 列表只有 output_narration_i，DeepSeek API 可能丢弃该消息。
+//          统一到 4 个函数名后，STORY_OPENING / NARRATION_I / NARRATION_II 共用 output_narration，
+//          历史消息的函数名始终在当前 tools 列表中找到，避免 API 兼容性问题。
 // 导出供 InputAssembler 构造历史 assistant tool_calls 消息时复用
 export const FLOW_FUNCTION_NAMES = {
   [FlowType.WORLD_GEN]: 'output_world',
   [FlowType.CHARACTER_GEN]: 'output_character',
-  [FlowType.KEY_CHARACTER_GEN]: 'output_key_character',
-  [FlowType.STORY_OPENING]: 'output_story_opening',
-  [FlowType.NARRATION_I]: 'output_narration_i',
-  [FlowType.NARRATION_II]: 'output_narration_ii',
+  [FlowType.KEY_CHARACTER_GEN]: 'output_character',
+  [FlowType.STORY_OPENING]: 'output_narration',
+  [FlowType.NARRATION_I]: 'output_narration',
+  [FlowType.NARRATION_II]: 'output_narration',
   [FlowType.HISTORY_SUMMARY]: 'output_summary',
 };
 
@@ -274,7 +269,7 @@ const FLOW_FUNCTION_DESCRIPTIONS = {
   [FlowType.WORLD_GEN]: '输出世界观设定',
   [FlowType.CHARACTER_GEN]: '输出玩家角色档案',
   [FlowType.KEY_CHARACTER_GEN]: '输出关键角色档案',
-  [FlowType.STORY_OPENING]: '输出跑团故事开幕',
+  [FlowType.STORY_OPENING]: '输出跑团故事开幕（hp/san/dice 填 null）',
   [FlowType.NARRATION_I]: '输出叙事I结果（根据玩家行为推进剧情，含实体更新/HP/SAN/选项，或触发骰子判定）',
   [FlowType.NARRATION_II]: '输出叙事II结果（根据投掷结果推进剧情）',
   [FlowType.HISTORY_SUMMARY]: '输出剧情总结',
@@ -284,7 +279,7 @@ const FLOW_SCHEMA_BUILDERS = {
   [FlowType.WORLD_GEN]: buildWorldGenStrictSchema,
   [FlowType.CHARACTER_GEN]: buildCharacterGenStrictSchema,
   [FlowType.KEY_CHARACTER_GEN]: buildCharacterGenStrictSchema,
-  [FlowType.STORY_OPENING]: buildStoryOpeningStrictSchema,
+  [FlowType.STORY_OPENING]: buildNarrationStrictSchema,
   [FlowType.NARRATION_I]: buildNarrationStrictSchema,
   [FlowType.NARRATION_II]: buildNarrationStrictSchema,
   [FlowType.HISTORY_SUMMARY]: buildSummaryStrictSchema,

@@ -36,6 +36,11 @@ export class OutputProcessor {
       flowType === FlowType.CHARACTER_GEN ||
       flowType === FlowType.KEY_CHARACTER_GEN
     ) {
+      // setupHistory 存完整 raw，作为 [assistant] 历史消息注入后续同阶段请求
+      // 设计动机：WORLD_GEN 阶段是调试世界观的过程，LLM 需要看到自己之前的完整输出
+      //          （包括 world_impression 文学化描述）才能理解上下文、避免重复、响应用户调整
+      // 注意：session.worldSettings（存 key_description）通过 [user] 消息注入到后续阶段（CHARACTER_GEN 等），
+      //       那是另一条路径，与本处 setupHistory 历史注入不冲突。
       entityUpdater.applySetupHistory(
         session,
         session.phase,

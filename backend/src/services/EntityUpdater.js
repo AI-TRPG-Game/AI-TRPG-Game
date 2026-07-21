@@ -263,18 +263,20 @@ export class EntityUpdater {
     const locs = parsed?.[LOCATIONS];
     if (Array.isArray(locs)) {
       for (const loc of locs) {
-        if (loc[ENTITY_NAME]) {
-          upsertEntity(
-            patch.locations,
-            {
-              id: loc[ENTITY_ID] || null,
-              name: loc[ENTITY_NAME],
-              description: loc[ENTITY_DESC] || '',
-            },
-            session,
-            'location'
-          );
-        }
+        if (!loc[ENTITY_NAME]) continue;
+        // 防护：只有名字没描述（LLM 引用已有实体但未填写任何新描述）→ 跳过
+        // 避免 upsertEntity 触发 lastUpdatedAt 错误刷新（即便 mergeEntity 已防护不覆盖描述）
+        if (!loc[ENTITY_DESC]) continue;
+        upsertEntity(
+          patch.locations,
+          {
+            id: loc[ENTITY_ID] || null,
+            name: loc[ENTITY_NAME],
+            description: loc[ENTITY_DESC] || '',
+          },
+          session,
+          'location'
+        );
       }
     }
 
@@ -285,6 +287,9 @@ export class EntityUpdater {
     if (Array.isArray(npcList)) {
       for (const npc of npcList) {
         if (!npc[ENTITY_NAME]) continue;
+        // 防护：只有名字没 currentState（LLM 引用已有 NPC 但未填写任何动态状态）→ 跳过
+        // 注意：NPC 的"描述"判断字段是 currentState（动态状态），不是 baseDescription（稳定人设）
+        if (!npc[ENTITY_CURRENT_STATE]) continue;
         // 过滤 background 新实体（id 为 null 的 background 角色不进 session）
         if (npc.importance === 'background' && !npc[ENTITY_ID]) {
           continue;
@@ -308,19 +313,20 @@ export class EntityUpdater {
     const itemList = parsed?.[ITEMS];
     if (Array.isArray(itemList)) {
       for (const item of itemList) {
-        if (item[ENTITY_NAME]) {
-          upsertEntity(
-            patch.inventory,
-            {
-              id: item[ENTITY_ID] || null,
-              name: item[ENTITY_NAME],
-              status: item[ITEM_STATUS] || '已获得',
-              description: item[ENTITY_DESC] || '',
-            },
-            session,
-            'item'
-          );
-        }
+        if (!item[ENTITY_NAME]) continue;
+        // 防护：只有名字没描述（LLM 引用已有实体但未填写任何新描述）→ 跳过
+        if (!item[ENTITY_DESC]) continue;
+        upsertEntity(
+          patch.inventory,
+          {
+            id: item[ENTITY_ID] || null,
+            name: item[ENTITY_NAME],
+            status: item[ITEM_STATUS] || '已获得',
+            description: item[ENTITY_DESC] || '',
+          },
+          session,
+          'item'
+        );
       }
     }
 

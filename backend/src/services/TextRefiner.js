@@ -257,6 +257,7 @@ export class TextRefiner {
     const locs = parsed[LOCATIONS];
     if (Array.isArray(locs) && locs.length > 0) {
       for (const l of locs) {
+        if (!l[ENTITY_NAME] || !l[ENTITY_DESC]) continue;  // 防护：跳过只有名字没描述的条目
         const text = `【地点】${l[ENTITY_NAME]}：${l[ENTITY_DESC]}`;
         metaLines.push(text);
         metaHtml.push(`${escapeHtml('【地点】')}${escapeHtml(l[ENTITY_NAME])}：${renderText(l[ENTITY_DESC] || '')}`);
@@ -266,6 +267,7 @@ export class TextRefiner {
     const npcList = parsed[NPCS];
     if (Array.isArray(npcList) && npcList.length > 0) {
       for (const n of npcList) {
+        if (!n[ENTITY_NAME] || !n[ENTITY_CURRENT_STATE]) continue;  // 防护：跳过只有名字没 currentState 的条目
         // NPC 新结构：baseDescription（稳定人设）+ currentState（动态状态）
         // 兜底 description 字段以兼容旧 LLM 输出
         const base = n[ENTITY_BASE_DESC] ?? n[ENTITY_DESC] ?? '';
@@ -282,6 +284,7 @@ export class TextRefiner {
     const itemList = parsed[ITEMS];
     if (Array.isArray(itemList) && itemList.length > 0) {
       for (const i of itemList) {
+        if (!i[ENTITY_NAME] || !i[ENTITY_DESC]) continue;  // 防护：跳过只有名字没描述的条目
         const text = `【物品】${i[ENTITY_NAME]}：${i[ITEM_STATUS] || '已获得'}，${i[ENTITY_DESC]}`;
         metaLines.push(text);
         metaHtml.push(`${escapeHtml('【物品】')}${escapeHtml(i[ENTITY_NAME])}：${escapeHtml(i[ITEM_STATUS] || '已获得')}，${renderText(i[ENTITY_DESC] || '')}`);

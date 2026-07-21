@@ -94,6 +94,29 @@ export class OpenAICompatibleProvider extends LLMProvider {
       body: JSON.stringify(body),
     });
 
+    // 方案 B+ 诊断日志：打印实际发送的 messages 结构（重点看 tool_calls 历史消息）
+    // 用于实测验证 DeepSeek API 是否正常处理 tool_calls 历史消息
+    if (process.env.LLM_DEBUG_MESSAGES === '1') {
+      console.log('[LLM 诊断] 发送到 API 的 messages 结构:');
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        const contentPreview = typeof m.content === 'string'
+          ? m.content.slice(0, 100)
+          : m.content;
+        console.log(`  [${i}] role=${m.role}, content=${JSON.stringify(contentPreview)}`);
+        if (m.tool_calls) {
+          console.log(`       tool_calls: name=${m.tool_calls[0].function.name}, arguments前80=${m.tool_calls[0].function.arguments.slice(0, 80)}...`);
+        }
+        if (m.tool_call_id) {
+          console.log(`       tool_call_id=${m.tool_call_id}`);
+        }
+        if (m.reasoning_content) {
+          console.log(`       reasoning_content 长度=${m.reasoning_content.length}`);
+        }
+      }
+      console.log(`[LLM 诊断] tools 函数名: ${tools?.[0]?.function?.name || '无'}`);
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`LLM API error: ${response.status} ${errorText}`);
@@ -164,6 +187,13 @@ export class OpenAICompatibleProvider extends LLMProvider {
       usage,
       toolCallId: toolCall.id || null,
       hasToolCall: true,
+      // 诊断字段：finish_reason 用于排查 tool_calls 也可能被 max_tokens 截断的场景
+      _diagnostic: {
+        reason: 'tool_call_ok',
+        reasoningLen: reasoningContent ? reasoningContent.length : 0,
+        contentHead: (toolCall.function.arguments || '').slice(0, 500),
+        finishReason: choice?.finish_reason || null,
+      },
     };
   }
 }

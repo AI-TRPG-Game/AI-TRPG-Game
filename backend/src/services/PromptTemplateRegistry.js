@@ -68,7 +68,7 @@ ${CHARACTER_RULES}
 ${PLAIN_TEXT_RULE}
 
 【字段说明】
-必须调用 output_key_character 函数返回 JSON 结果（字段结构与玩家角色相同）。`;
+必须调用 output_character 函数返回 JSON 结果（字段结构与玩家角色相同）。`;
 
 const STORY_OPENING_INSTRUCTION = `${BASE_INTRO}
 现在，请撰写一个符合设定、有代入感的跑团故事开幕。
@@ -76,7 +76,7 @@ const STORY_OPENING_INSTRUCTION = `${BASE_INTRO}
 ${PLAIN_TEXT_RULE}
 
 【字段说明】
-必须调用 output_story_opening 函数返回 JSON 结果，字段结构如下：
+必须调用 output_narration 函数返回 JSON 结果，字段结构如下：
 - narration：开幕叙述文本，文学性强、有沉浸感
 - locations / npcs / items：开幕场景中首次出场的实体（id 全部填 null，系统会自动分配）
   - npc 必须标注 importance 字段：
@@ -85,6 +85,8 @@ ${PLAIN_TEXT_RULE}
     - "background"：路人/酒客/侍女等背景角色 —— 不要加入 npcs 数组，直接在 narration 中描写即可
   - npc.baseDescription：稳定人设（≤20字），仅本次填写，后续不会被覆盖
   - npc.currentState：动态状态（可留空字符串）
+- hp / san：固定填 null（开幕无 HP/SAN 变化）
+- dice：固定填 null（开幕不触发掷骰判定）
 - options：恰好 4 个选项，前 3 个以 "A." "B." "C." 开头，最后一个固定为 "D. 自由行动"
 
 ${buildEntityReferenceRules(true)}`;
@@ -95,7 +97,7 @@ const NARRATION_I_INSTRUCTION = `${BASE_INTRO}
 ${PLAIN_TEXT_RULE}
 
 【字段说明】
-必须调用 output_narration_i 函数返回 JSON 结果，字段结构如下：
+必须调用 output_narration 函数返回 JSON 结果，字段结构如下：
 - narration：叙事文本，文学性强、有沉浸感
 - locations / npcs / items：本轮新增或状态更新的实体（无则空数组 []）
   - npc 必须标注 importance 字段：
@@ -117,7 +119,7 @@ const NARRATION_II_INSTRUCTION = `${BASE_INTRO}
 ${PLAIN_TEXT_RULE}
 
 【字段说明】
-必须调用 output_narration_ii 函数返回 JSON 结果（字段结构与 NARRATION_I 相同）：
+必须调用 output_narration 函数返回 JSON 结果（字段结构与 NARRATION_I 相同）：
 - dice 与 options 二选一（互斥，规则同 NARRATION_I）：
   - 若剧情仍需新一轮投掷判定：dice 填对象，options 填 null
   - 否则：dice 填 null，options 填恰好 4 个选项
