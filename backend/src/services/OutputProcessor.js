@@ -50,7 +50,7 @@ export class OutputProcessor {
     }
 
     // Narrative 阶段（STORY_OPENING / NARRATION_I / NARRATION_II）
-    const statePatch = entityUpdater.applyNarrative(session, parsed, rawText);
+    const statePatch = entityUpdater.applyNarrative(session, parsed, rawText, flowType);
     return {
       branch: 'NARRATIVE',
       raw: rawText,

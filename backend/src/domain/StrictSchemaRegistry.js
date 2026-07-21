@@ -258,7 +258,9 @@ export function buildSummaryStrictSchema() {
 // FlowType → schema 映射 + function name
 // ════════════════════════════════════════
 
-const FLOW_FUNCTION_NAMES = {
+// FlowType → function name 映射
+// 导出供 InputAssembler 构造历史 assistant tool_calls 消息时复用
+export const FLOW_FUNCTION_NAMES = {
   [FlowType.WORLD_GEN]: 'output_world',
   [FlowType.CHARACTER_GEN]: 'output_character',
   [FlowType.KEY_CHARACTER_GEN]: 'output_key_character',

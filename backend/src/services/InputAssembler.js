@@ -8,23 +8,23 @@ import { buildStrictTools } from '../domain/StrictSchemaRegistry.js';
 
 /**
  * 将 chatRecord 条目映射为 API messages（assistant / user 交替）。
- * - kp → assistant
+ * - kp → assistant（若有 parsed，content 用 JSON 字符串保留结构化格式，强化 LLM 格式一致性引导）
  * - player → user
  * - system → user（投掷结果等系统消息，对 LLM 而言是"需要回应的输入"）
  * - summary → assistant
  *
- * 重要：DeepSeek 官方要求"思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content"
- * 因此 kp 角色的 assistant 消息会注入 session.recentReasoningContents 中对应的思维链
+ * 设计决策：历史 KP 消息用 content=JSON 字符串，不用 tool_calls 结构。
+ *   早期方案 B 曾用 tool_calls + tool 消息对，但导致跨 flowType 的函数名不一致问题
+ *   （STORY_OPENING 引用 output_story_opening，但 NARRATION_I 的 tools 列表只有 output_narration_i），
+ *   DeepSeek API 可能丢弃引用不存在函数名的 tool_calls 消息，导致 STORY_OPENING 内容丢失。
+ *   改用 content=JSON 字符串：LLM 仍能看到结构化 JSON 格式的历史消息，强化格式引导，
+ *   且不触发 tool_calls 的函数名校验，对所有 flowType 都兼容。
  *
- * 匹配策略：按 kp 出现顺序与 reasoningContents 队列顺序一一对应（FIFO）
- * —— 不再用时间容忍度匹配。原因：
- *   1. 时间戳在多轮调用、网络延迟、本地时钟漂移下不可靠，曾出现 ±60s 内匹配错位
- *   2. recentReasoningContents 由 GameOrchestrator 在每次 LLM 调用完成后按顺序推入，
- *      chatRecord 中的 kp 条目也按调用顺序写入，二者天然 FIFO 对应
- *   3. FIFO 简单可靠，无需任何时间容忍度
+ * 重要：DeepSeek 官方要求"思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content"
+ * reasoning_content 匹配策略：按 kp 出现顺序与 reasoningContents 队列顺序一一对应（FIFO）
  */
 function chatRecordToMessages(chatRecord, reasoningContents = []) {
-  const reasoningQueue = [...reasoningContents]; // 不再排序，直接按 push 顺序 FIFO
+  const reasoningQueue = [...reasoningContents]; // 按 push 顺序 FIFO
   let reasoningIdx = 0;
 
   const messages = [];
@@ -39,10 +39,20 @@ function chatRecordToMessages(chatRecord, reasoningContents = []) {
       role = 'assistant'; // kp / summary
     }
 
-    const msg = { role, content: entry.content };
+    // KP 消息携带 parsed 对象时，content 用 JSON 字符串（保留结构化格式，强化 LLM 格式引导）
+    // 无 parsed 的 KP 条目（旧数据 / pendingBracket 片段）退化为原始 content 文本
+    let content = entry.content;
+    if (
+      entry.role === ChatRole.KP &&
+      entry.parsed &&
+      typeof entry.parsed === 'object'
+    ) {
+      content = JSON.stringify(entry.parsed);
+    }
+
+    const msg = { role, content };
 
     // kp 角色的 assistant 消息：按 FIFO 顺序匹配 reasoning_content
-    // 官方要求：工具调用场景下，所有 assistant 消息必须携带 reasoning_content
     if (entry.role === ChatRole.KP && reasoningIdx < reasoningQueue.length) {
       msg.reasoning_content = reasoningQueue[reasoningIdx].reasoningContent;
       reasoningIdx++;

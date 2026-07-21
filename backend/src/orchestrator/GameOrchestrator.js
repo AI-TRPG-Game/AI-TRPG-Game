@@ -334,15 +334,24 @@ export class GameOrchestrator {
     session.keyCharacters[session.keyCharacterIndex] = charText;
 
     const idx = session.keyCharacterIndex;
-    const isMax = session.keyCharacters.length >= GameConfig.KEY_CHARACTER_MAX_COUNT;
+    const savedCount = session.keyCharacters.filter(Boolean).length;
+    const isMax = savedCount >= GameConfig.KEY_CHARACTER_MAX_COUNT;
 
     this._pushDisplay(session, 'system', GameConfig.GUIDANCE.KEY_CHARACTER_SAVED);
-    this.repository.save(session);
 
+    // 保存后如果有剩余名额，自动邀请下一个角色
+    // 避免 bug：用户忘记点"邀请下一个"就直接生成新角色，导致 keyCharacters[keyCharacterIndex] 覆盖旧角色
     let nextGuidance = null;
     if (isMax) {
       nextGuidance = GameConfig.GUIDANCE.KEY_CHARACTER_MAX;
+    } else {
+      session.keyCharacterIndex = session.keyCharacterIndex + 1;
+      session.subState = SubState.AWAITING_INPUT;
+      nextGuidance = GameConfig.GUIDANCE.KEY_CHARACTER_NEXT(session.keyCharacterIndex);
+      this._pushDisplay(session, 'system', nextGuidance);
     }
+
+    this.repository.save(session);
 
     return {
       session: session.toClientJSON(),
@@ -846,12 +855,16 @@ export class GameOrchestrator {
 
   async _executeDice(session, diceNotation, pendingRaw, onDebug, onSystemMessage) {
     // 用户已确认 —— 将本次触发 dice 的 narration 和【】写入 chatRecord
+    // 方案 B：pendingParsed 带 parsed + flowType，让历史 assistant 消息呈 tool_calls 结构
+    //         pendingBracket 是从 raw 提取的【】片段，非完整 parsed，保持纯文本
     const pendingParsed = jsonOutputParser.parse(pendingRaw);
     if (pendingParsed?.narration) {
       session.chatRecord.push({
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
         content: pendingParsed.narration,
+        parsed: pendingParsed,
+        flowType: FlowType.NARRATION_I,
         timestamp: new Date().toISOString(),
       });
     }

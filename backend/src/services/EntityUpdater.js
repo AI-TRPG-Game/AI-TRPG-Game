@@ -64,7 +64,7 @@ function currentTurn(session) {
 /**
  * 合并 entry 到已有实体（不覆盖稳定字段）。
  * - npc: name/baseDescription 不覆盖；currentState 覆盖
- * - location/item: name 不覆盖；description 覆盖；item 的 status 覆盖
+ * - location/item: name 不覆盖；description 仅在新值非空时覆盖；item 的 status 同理
  */
 function mergeEntity(existing, entry, entityType) {
   if (entityType === 'npc') {
@@ -79,8 +79,11 @@ function mergeEntity(existing, entry, entityType) {
     if (entry.importance) existing.importance = entry.importance;
   } else {
     if (!existing.name && entry.name) existing.name = entry.name;
-    if (entry.description !== undefined) existing.description = entry.description;
-    if (entityType === 'item' && entry.status !== undefined) {
+    // 防护：新值非空才覆盖，避免 LLM 引用已有实体但未填描述时用空串覆盖原描述
+    // 触发场景：LLM 输出已存在的 location/item 但 description 字段为 null/空，
+    //          upsertEntity 调用处已把 null 兜底为 ''，若不加防护会清空已有描述
+    if (entry.description) existing.description = entry.description;
+    if (entityType === 'item' && entry.status) {
       existing.status = entry.status;
     }
   }
@@ -224,7 +227,7 @@ export class EntityUpdater {
    * @param {object} parsed - JSON.parse 后的对象
    * @param {string} rawText - 原始 JSON 文本
    */
-  applyNarrative(session, parsed, rawText) {
+  applyNarrative(session, parsed, rawText, flowType) {
     // 一次性迁移：给所有旧实体补 id 和缺失字段
     ensureIdsForExistingEntities(session);
 
@@ -235,8 +238,10 @@ export class EntityUpdater {
     };
 
     // 存储 narration + options 到 chatRecord（合并为一条 assistant 消息）
-    // 理由：options 是 KP 叙述的一部分，不应单开一条消息；
-    //       这样 chatRecord 末尾就是 KP 完整回复（含选项），下一条是用户 prompt，符合对话惯例
+    // 方案 B 改造：同时存储 parsed 对象和 flowType，让 InputAssembler 能构造
+    //   {role: assistant, tool_calls: [...]} + {role: tool, ...} 消息对
+    // 这样 LLM 看到的历史 assistant 消息格式 = 它被要求输出的格式，强化格式一致性
+    // content 字段保留拼接文本，用于 rebuildDisplayLog 兜底（旧数据刷新时重建 displayLog）
     const narration = parsed?.[NARRATION];
     const opts = parsed?.[OPTIONS];
     if (narration && typeof narration === 'string') {
@@ -248,6 +253,8 @@ export class EntityUpdater {
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
         content,
+        parsed,
+        flowType: flowType || null,
         timestamp: new Date().toISOString(),
       });
     }

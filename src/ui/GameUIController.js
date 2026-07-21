@@ -1438,8 +1438,8 @@ export class GameUIController {
     } else if (phase === 'KEY_CHARACTER_SETTING') {
       enterKeyCharBtn.style.display = 'none';
       saveKeyCharBtn.style.display = 'inline-block';
-      inviteNextBtn.style.display =
-        keyCharCount > 0 && keyCharCount < 3 ? 'inline-block' : 'none';
+      // 保存后后端自动邀请下一个角色（递增 keyCharacterIndex），无需手动点击
+      inviteNextBtn.style.display = 'none';
       autoGenBtn.style.display = 'inline-block';
     } else {
       enterKeyCharBtn.style.display = 'none';
