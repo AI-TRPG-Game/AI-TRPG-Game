@@ -586,6 +586,14 @@ export class GameUIController {
     try {
       const resp = await apiClient.confirmDice(this.session, {
         onDebug: (log) => this._appendDebugPanel(log),
+        // 系统判定结果在 LLM 调用前就到达，立即渲染到对话界面
+        // 此时 waiting 元素已显示，先清空再追加系统消息，最后重新显示 waiting
+        // 保证顺序为：[系统判定结果] → [KP正在思考话术] → [LLM 回复]
+        onSystemMessage: (msg) => {
+          this._clearWaiting();
+          this._appendMessage(msg, 'system');
+          this._showWaiting();
+        },
       });
       this._renderLlmResponse(resp, { isDiceBranch: true });
       await this._persistSession();

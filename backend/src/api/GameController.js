@@ -25,6 +25,7 @@ function requireSession(req) {
  *
  * 事件类型：
  *   - debug: 中间调试日志（debug_prompt / debug_raw / parse_fail / retry_clear / system）
+ *   - system-message: 系统判定结果（dice 投掷结果，需在 LLM 回复前立即显示）
  *   - done:  最终结果（含 session、result、systemMessages 等）
  *   - error: 错误（含 message 字段）
  */
@@ -177,6 +178,8 @@ export function createGameController({ llmProvider }) {
       const orchestrator = createStatelessOrchestrator({ session, llmProvider });
       const result = await orchestrator.confirmDice(req.params.id, {
         onDebug: (log) => sendSse('debug', log),
+        // 系统判定结果在 LLM 调用前就推送，让用户立即看到【使用XX技能（技能点YY），判定结果Z，等级】
+        onSystemMessage: (msg) => sendSse('system-message', { message: msg }),
       });
       sendSse('done', result);
     } catch (err) {

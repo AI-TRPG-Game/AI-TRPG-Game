@@ -17,6 +17,13 @@ import { saveExtractor } from '../services/SaveExtractor.js';
 import { diceService } from '../services/DiceService.js';
 import { HistorySummarizer } from '../services/HistorySummarizer.js';
 import { FLOW_REQUIRED_FIELD } from '../services/PromptTemplateRegistry.js';
+import {
+  DICE,
+  DICE_SKILL_NAME,
+  DICE_SKILL_POINT,
+  DICE_NOTATION,
+  DICE_SUCCESS_RATE,
+} from '../domain/NarrativeSchema.js';
 import { textRefiner } from '../services/TextRefiner.js';
 
 function escapeHtml(s) {
@@ -764,10 +771,16 @@ export class GameOrchestrator {
     };
     this.repository.save(session);
 
-    return { branch: 'DICE_AWAITING', diceNotation: diceResult.diceNotation };
+    // 保留 refinedHtml，让前端 _renderLlmResponse 能渲染 narration + dice 提示
+    // 否则前端只看到 { branch: 'DICE_AWAITING', diceNotation }，不会渲染 bot 消息
+    return {
+      branch: 'DICE_AWAITING',
+      diceNotation: diceResult.diceNotation,
+      refinedHtml: diceResult.refinedHtml,
+    };
   }
 
-  async confirmDice(sessionId, { onDebug } = {}) {
+  async confirmDice(sessionId, { onDebug, onSystemMessage } = {}) {
     const session = this.getSession(sessionId);
     if (!session.pendingDiceFlow || session.subState !== SubState.DICE_PENDING) {
       throw new Error('当前无待确认的掷骰');
@@ -779,10 +792,18 @@ export class GameOrchestrator {
 
     let diceAwaiting = false;
     try {
-      const execResult = await this._executeDice(session, diceNotation, pendingRaw, onDebug);
+      const execResult = await this._executeDice(
+        session,
+        diceNotation,
+        pendingRaw,
+        onDebug,
+        onSystemMessage
+      );
       if (execResult && execResult.branch === 'DICE_AWAITING') {
         diceAwaiting = true;
       }
+      // dice 系统消息已通过 onSystemMessage 实时推送给前端，不再在 done 事件里重复返回
+      // （避免 _renderLlmResponse 二次渲染同一消息）
       return {
         session: session.toClientJSON(),
         result: execResult,
@@ -823,7 +844,7 @@ export class GameOrchestrator {
     };
   }
 
-  async _executeDice(session, diceNotation, pendingRaw, onDebug) {
+  async _executeDice(session, diceNotation, pendingRaw, onDebug, onSystemMessage) {
     // 用户已确认 —— 将本次触发 dice 的 narration 和【】写入 chatRecord
     const pendingParsed = jsonOutputParser.parse(pendingRaw);
     if (pendingParsed?.narration) {
@@ -846,9 +867,25 @@ export class GameOrchestrator {
 
     const requests = diceService.parseNotation(diceNotation);
     const values = diceService.rollAll(requests);
-    const systemMsg = diceService.formatSystemMessage(values);
+
+    // 从上一轮 LLM 输出中解析 dice 字段，由系统按 COC 7e 规则组装判定结果
+    // 替代原"【系统投掷结果】9"格式，LLM 无需再自行生成判定等级
+    const diceInfo = (pendingParsed && pendingParsed[DICE]) || {};
+    const systemMsg = diceService.formatSystemMessage({
+      skillName: diceInfo[DICE_SKILL_NAME] || '',
+      skillPoint: diceInfo[DICE_SKILL_POINT] ?? 0,
+      notation: diceInfo[DICE_NOTATION] || diceNotation,
+      successRate: diceInfo[DICE_SUCCESS_RATE] ?? 0,
+      values,
+    });
 
     this._pushDisplay(session, 'system', systemMsg);
+
+    // 系统判定结果生成后立即通过 SSE 推送给前端，让用户在 LLM 回复前就能看到
+    // 不要等整个 _executeDice 完成（含 LLM 调用）才一起返回，否则用户等待时间长
+    if (onSystemMessage) {
+      try { onSystemMessage(systemMsg); } catch { /* 回调异常不应影响主流程 */ }
+    }
 
     session.chatRecord.push({
       role: ChatRole.SYSTEM,
@@ -909,10 +946,7 @@ export class GameOrchestrator {
     while (result.branch === 'DICE') {
       const diceCheck = await this._handleDiceBranch(session, result, debugLogs, onDebug);
       if (diceCheck.branch === 'DICE_AWAITING') {
-        return {
-          ...diceCheck,
-          systemMessages: [systemMsg],
-        };
+        return diceCheck;
       }
       result = diceCheck;
     }
@@ -921,9 +955,6 @@ export class GameOrchestrator {
     session.subState = SubState.AWAITING_INPUT;
     this.repository.save(session);
 
-    return {
-      ...result,
-      systemMessages: [systemMsg],
-    };
+    return result;
   }
 }

@@ -168,19 +168,20 @@ export class ApiClient {
     return this._consumeSseStream(res, onDebug);
   }
 
-  async confirmDice(session, { onDebug } = {}) {
+  async confirmDice(session, { onDebug, onSystemMessage } = {}) {
     const res = await fetch(`${API_BASE}/sessions/${session.id}/dice-confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
-    return this._consumeSseStream(res, onDebug);
+    return this._consumeSseStream(res, onDebug, onSystemMessage);
   }
 
   /**
-   * 消费 SSE 流：解析 event:debug / event:done / event:error 三类事件。
+   * 消费 SSE 流：解析 event:debug / event:system-message / event:done / event:error 事件。
    * - debug：调用 onDebug(log) 实时推送到 god's eye 面板
+   * - system-message：调用 onSystemMessage(msg) 实时推送到对话界面（dice 判定结果）
    * - done：resolve 最终结果
    * - error：reject 错误
    *
@@ -189,7 +190,7 @@ export class ApiClient {
    *   - SSE 事件以 \n\n 分隔，事件内 event:/data: 行用 \n 分隔
    *   - data 字段可能跨多行（这里后端单行写入，但兼容多行拼接）
    */
-  async _consumeSseStream(res, onDebug) {
+  async _consumeSseStream(res, onDebug, onSystemMessage) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -212,6 +213,9 @@ export class ApiClient {
 
         if (parsed.event === 'debug' && onDebug) {
           try { onDebug(parsed.data); } catch { /* 回调异常不影响流消费 */ }
+        } else if (parsed.event === 'system-message' && onSystemMessage) {
+          // dice 系统判定结果，需在 LLM 回复前立即渲染到对话界面
+          try { onSystemMessage(parsed.data?.message); } catch { /* 回调异常不影响流消费 */ }
         } else if (parsed.event === 'done') {
           finalResult = parsed.data;
         } else if (parsed.event === 'error') {
