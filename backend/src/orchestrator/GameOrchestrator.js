@@ -568,6 +568,9 @@ export class GameOrchestrator {
 
     // 缓存最近一次的 reasoning_content（思考模式 + 工具调用场景下后续轮次必须回传）
     let lastReasoningContent = null;
+    // 保存最近一次 doCall 的诊断信息（finish_reason 等），供 tryRefine 在解析失败时使用
+    // 必须在 doCall 定义之前声明，否则 doCall 内部赋值会触发 TDZ（暂时性死区）
+    let lastDiagnostic = null;
 
     const doCall = async (assembledPrompt) => {
       attemptNum++;
@@ -658,7 +661,6 @@ export class GameOrchestrator {
     }
 
     let raw = await doCall(assembled);
-    let lastDiagnostic = null; // 保存最近一次 doCall 的诊断信息（finish_reason 等）
 
     const tryRefine = async (rawText) => {
       const parsed = jsonOutputParser.parse(rawText);
@@ -698,6 +700,29 @@ export class GameOrchestrator {
           content: `JSON 解析成功，但缺少必需字段 "${requiredField}"。\n【已有字段】${fieldDetails || '(空对象)'}\n【raw 前 500 字符】\n${rawHead}`,
         });
       }
+
+      // 专门针对 token 截断（finish_reason=length）的显式抛出
+      // 场景：思考模式 + reasoning_effort 过高时，reasoning_content 消耗全部 max_tokens，
+      //       导致 tool_calls.arguments 或 content 被截断，JSON 无法闭合 → 解析失败
+      // 动机：用户要求在 god's eye 里对 token 截断问题加专门抛出，便于一眼定位根因
+      if (finishReason === 'length') {
+        this._pushDebug(debugLogs, onDebug, {
+          type: 'system',
+          flowType,
+          attempt: attemptNum,
+          content:
+            `⚠️ Token 截断 detected（finish_reason=length）\n` +
+            `根本原因：max_tokens 不足，LLM 输出被强制截断（思考模式下 reasoning_content 与 tool_calls.arguments 共享 max_tokens 配额）。\n` +
+            `现象：raw 长度=${rawLen}，JSON 未闭合或必需字段 "${requiredField}" 未输出完。\n` +
+            `诊断：hasToolCall=${hasToolCall}（yes=tool_calls.arguments 被截断；no=strict 失效走 content 且 content 被截断）\n` +
+            `【raw 尾部 200 字符】\n${rawTail}\n` +
+            `解决建议：\n` +
+            `  1. 增大 FLOW_MAX_TOKENS[${flowType}]（当前值见 PromptTemplateRegistry.js）\n` +
+            `  2. 或降低 FLOW_REASONING_EFFORT[${flowType}]（high→默认，减少思考消耗）\n` +
+            `  3. 或精简 prompt / 历史消息长度，减少输入 token 占用`,
+        });
+      }
+
       return { ok: false };
     };
 
