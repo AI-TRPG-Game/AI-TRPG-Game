@@ -72,9 +72,12 @@ export class IdAllocator {
     return `npc_${pad3(existingCount + 1)}`;
   }
 
-  /** 分配下一个新角色 NPC id（从 npc_100 起） */
-  nextNewNpcId(session) {
-    const maxNum = maxIdNum(session.npcs, 'npc');
+  /**
+   * 分配下一个新角色 NPC id（从 npc_100 起）。
+   * @param {Array} list - 当前 npc 列表（接收 patch 副本，确保同批多个新实体 id 递增不重复）
+   */
+  nextNewNpcId(list) {
+    const maxNum = maxIdNum(list, 'npc');
     const nextNum = Math.max(maxNum + 1, NPC_NEW_FLOOR);
     return `npc_${pad3(nextNum)}`;
   }
@@ -82,6 +85,7 @@ export class IdAllocator {
   /**
    * 为无 id 的旧 NPC 补 id（一次性迁移用）。
    * 启发式：name 匹配主角→npc_000；匹配邀请角色→npc_001~003；否则→npc_100+
+   * 注意：迁移时直接 mutate session.npcs，所以传 session.npcs 给 nextNewNpcId 即可。
    */
   ensureNpcId(session, npc) {
     if (npc.id) return npc.id;
@@ -100,29 +104,35 @@ export class IdAllocator {
       }
     }
     // 否则当作新角色
-    return this.nextNewNpcId(session);
+    return this.nextNewNpcId(session.npcs);
   }
 
-  /** 分配下一个地点 id（loc_001 起，单段递增） */
-  nextLocationId(session) {
-    return `loc_${pad3(maxIdNum(session.locations, 'loc') + 1)}`;
+  /**
+   * 分配下一个地点 id（loc_001 起，单段递增）。
+   * @param {Array} list - 当前 location 列表（接收 patch 副本，确保同批多个新实体 id 递增不重复）
+   */
+  nextLocationId(list) {
+    return `loc_${pad3(maxIdNum(list, 'loc') + 1)}`;
   }
 
   /** 为无 id 的旧地点补 id */
   ensureLocationId(session, loc) {
     if (loc.id) return loc.id;
-    return this.nextLocationId(session);
+    return this.nextLocationId(session.locations);
   }
 
-  /** 分配下一个物品 id（inv_001 起，单段递增） */
-  nextItemId(session) {
-    return `inv_${pad3(maxIdNum(session.inventory, 'inv') + 1)}`;
+  /**
+   * 分配下一个物品 id（inv_001 起，单段递增）。
+   * @param {Array} list - 当前 inventory 列表（接收 patch 副本，确保同批多个新实体 id 递增不重复）
+   */
+  nextItemId(list) {
+    return `inv_${pad3(maxIdNum(list, 'inv') + 1)}`;
   }
 
   /** 为无 id 的旧物品补 id */
   ensureItemId(session, item) {
     if (item.id) return item.id;
-    return this.nextItemId(session);
+    return this.nextItemId(session.inventory);
   }
 }
 

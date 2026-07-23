@@ -63,6 +63,11 @@ function normalizeSession(session) {
     pendingDiceFlow: recoveredSubState === 'AWAITING_INPUT'
       ? null
       : session.pendingDiceFlow || null,
+    // DeepSeek 官方要求：思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content
+    // 因此持久化保留最近 10 条 reasoning_content，避免会话刷新后丢失导致 API 行为异常
+    recentReasoningContents: Array.isArray(session.recentReasoningContents)
+      ? session.recentReasoningContents.slice(-10)
+      : [],
     createdAt: session.createdAt || now,
     updatedAt: session.updatedAt || now,
     sortOrder: session.sortOrder ?? Date.now(),

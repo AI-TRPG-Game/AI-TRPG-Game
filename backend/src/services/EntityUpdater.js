@@ -64,7 +64,7 @@ function currentTurn(session) {
 /**
  * 合并 entry 到已有实体（不覆盖稳定字段）。
  * - npc: name/baseDescription 不覆盖；currentState 覆盖
- * - location/item: name 不覆盖；description 覆盖；item 的 status 覆盖
+ * - location/item: name 不覆盖；description 仅在新值非空时覆盖；item 的 status 同理
  */
 function mergeEntity(existing, entry, entityType) {
   if (entityType === 'npc') {
@@ -75,31 +75,37 @@ function mergeEntity(existing, entry, entityType) {
     if (entry.currentState !== undefined && entry.currentState !== '') {
       existing.currentState = entry.currentState;
     }
+    // importance：LLM 可以重新评估重要性（升级或降级）
+    if (entry.importance) existing.importance = entry.importance;
   } else {
     if (!existing.name && entry.name) existing.name = entry.name;
-    if (entry.description !== undefined) existing.description = entry.description;
-    if (entityType === 'item' && entry.status !== undefined) {
+    // 防护：新值非空才覆盖，避免 LLM 引用已有实体但未填描述时用空串覆盖原描述
+    // 触发场景：LLM 输出已存在的 location/item 但 description 字段为 null/空，
+    //          upsertEntity 调用处已把 null 兜底为 ''，若不加防护会清空已有描述
+    if (entry.description) existing.description = entry.description;
+    if (entityType === 'item' && entry.status) {
       existing.status = entry.status;
     }
   }
 }
 
 /** 创建新实体（带 id + firstSeenAt/lastUpdatedAt） */
-function createNewEntity(entry, session, entityType) {
+function createNewEntity(entry, list, session, entityType) {
   const turn = currentTurn(session);
   if (entityType === 'npc') {
     return {
-      id: idAllocator.nextNewNpcId(session),
+      id: idAllocator.nextNewNpcId(list),
       name: entry.name || '',
       baseDescription: entry.baseDescription ?? entry.description ?? '',
       currentState: entry.currentState ?? '',
+      importance: entry.importance || 'supporting',   // 兜底默认值（不应触发，schema 已强制 enum）
       firstSeenAt: turn,
       lastUpdatedAt: turn,
     };
   }
   if (entityType === 'location') {
     return {
-      id: idAllocator.nextLocationId(session),
+      id: idAllocator.nextLocationId(list),
       name: entry.name || '',
       description: entry.description ?? '',
       firstSeenAt: turn,
@@ -108,7 +114,7 @@ function createNewEntity(entry, session, entityType) {
   }
   // item
   return {
-    id: idAllocator.nextItemId(session),
+    id: idAllocator.nextItemId(list),
     name: entry.name || '',
     status: entry.status ?? '已获得',
     description: entry.description ?? '',
@@ -119,7 +125,7 @@ function createNewEntity(entry, session, entityType) {
 
 /**
  * 通用 upsert：按 id 优先匹配，name 模糊兜底，新实体分配 id。
- * @param {Array} list - session 中的实体列表（已 slice 副本）
+ * @param {Array} list - 实体列表（patch 副本，新实体 push 后立即可见，确保同批 id 递增）
  * @param {Object} entry - LLM 输出的实体（可能含 id、name 等）
  * @param {Object} session
  * @param {'npc'|'location'|'item'} entityType
@@ -150,7 +156,7 @@ function upsertEntity(list, entry, session, entityType) {
   }
 
   // 3. 新实体
-  const newEntity = createNewEntity(entry, session, entityType);
+  const newEntity = createNewEntity(entry, list, session, entityType);
   // 若 LLM 显式给了 id（如误填 npc_001 引用不存在的邀请角色），保留其 id
   // 但要避免与现有 id 冲突
   if (entry.id && !list.some((item) => item.id === entry.id)) {
@@ -188,6 +194,8 @@ function ensureIdsForExistingEntities(session) {
       delete npc.description;
     }
     if (npc.currentState === undefined) npc.currentState = '';
+    // 兼容旧 session 无 importance 字段：默认 'key'（已存在的实体视为重要）
+    if (npc.importance === undefined) npc.importance = 'key';
     if (npc.firstSeenAt === undefined) npc.firstSeenAt = 0;
     if (npc.lastUpdatedAt === undefined) npc.lastUpdatedAt = 0;
   }
@@ -219,7 +227,7 @@ export class EntityUpdater {
    * @param {object} parsed - JSON.parse 后的对象
    * @param {string} rawText - 原始 JSON 文本
    */
-  applyNarrative(session, parsed, rawText) {
+  applyNarrative(session, parsed, rawText, flowType) {
     // 一次性迁移：给所有旧实体补 id 和缺失字段
     ensureIdsForExistingEntities(session);
 
@@ -230,8 +238,10 @@ export class EntityUpdater {
     };
 
     // 存储 narration + options 到 chatRecord（合并为一条 assistant 消息）
-    // 理由：options 是 KP 叙述的一部分，不应单开一条消息；
-    //       这样 chatRecord 末尾就是 KP 完整回复（含选项），下一条是用户 prompt，符合对话惯例
+    // 方案 B 改造：同时存储 parsed 对象和 flowType，让 InputAssembler 能构造
+    //   {role: assistant, tool_calls: [...]} + {role: tool, ...} 消息对
+    // 这样 LLM 看到的历史 assistant 消息格式 = 它被要求输出的格式，强化格式一致性
+    // content 字段保留拼接文本，用于 rebuildDisplayLog 兜底（旧数据刷新时重建 displayLog）
     const narration = parsed?.[NARRATION];
     const opts = parsed?.[OPTIONS];
     if (narration && typeof narration === 'string') {
@@ -243,6 +253,8 @@ export class EntityUpdater {
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
         content,
+        parsed,
+        flowType: flowType || null,
         timestamp: new Date().toISOString(),
       });
     }
@@ -251,38 +263,49 @@ export class EntityUpdater {
     const locs = parsed?.[LOCATIONS];
     if (Array.isArray(locs)) {
       for (const loc of locs) {
-        if (loc[ENTITY_NAME]) {
-          upsertEntity(
-            patch.locations,
-            {
-              id: loc[ENTITY_ID] || null,
-              name: loc[ENTITY_NAME],
-              description: loc[ENTITY_DESC] || '',
-            },
-            session,
-            'location'
-          );
-        }
+        if (!loc[ENTITY_NAME]) continue;
+        // 防护：只有名字没描述（LLM 引用已有实体但未填写任何新描述）→ 跳过
+        // 避免 upsertEntity 触发 lastUpdatedAt 错误刷新（即便 mergeEntity 已防护不覆盖描述）
+        if (!loc[ENTITY_DESC]) continue;
+        upsertEntity(
+          patch.locations,
+          {
+            id: loc[ENTITY_ID] || null,
+            name: loc[ENTITY_NAME],
+            description: loc[ENTITY_DESC] || '',
+          },
+          session,
+          'location'
+        );
       }
     }
 
-    // npcs（JSON 数组）
+    // npcs（JSON 数组）—— 过滤 background 角色（连带解决"LLM 记录过多不重要对象"问题）
+    // 三层防护 L3：后端兜底过滤。即便 LLM 违反 prompt 把 background 角色输出到列表，也在此剔除。
+    // 例外：若 LLM 给了 id（引用已有实体），则保留（可能是状态更新，不应因 importance 被误删）
     const npcList = parsed?.[NPCS];
     if (Array.isArray(npcList)) {
       for (const npc of npcList) {
-        if (npc[ENTITY_NAME]) {
-          upsertEntity(
-            patch.npcs,
-            {
-              id: npc[ENTITY_ID] || null,
-              name: npc[ENTITY_NAME],
-              baseDescription: npc[ENTITY_BASE_DESC] || '',
-              currentState: npc[ENTITY_CURRENT_STATE] || '',
-            },
-            session,
-            'npc'
-          );
+        if (!npc[ENTITY_NAME]) continue;
+        // 防护：只有名字没 currentState（LLM 引用已有 NPC 但未填写任何动态状态）→ 跳过
+        // 注意：NPC 的"描述"判断字段是 currentState（动态状态），不是 baseDescription（稳定人设）
+        if (!npc[ENTITY_CURRENT_STATE]) continue;
+        // 过滤 background 新实体（id 为 null 的 background 角色不进 session）
+        if (npc.importance === 'background' && !npc[ENTITY_ID]) {
+          continue;
         }
+        upsertEntity(
+          patch.npcs,
+          {
+            id: npc[ENTITY_ID] || null,
+            name: npc[ENTITY_NAME],
+            baseDescription: npc[ENTITY_BASE_DESC] || '',
+            currentState: npc[ENTITY_CURRENT_STATE] || '',
+            importance: npc.importance || 'supporting',
+          },
+          session,
+          'npc'
+        );
       }
     }
 
@@ -290,19 +313,20 @@ export class EntityUpdater {
     const itemList = parsed?.[ITEMS];
     if (Array.isArray(itemList)) {
       for (const item of itemList) {
-        if (item[ENTITY_NAME]) {
-          upsertEntity(
-            patch.inventory,
-            {
-              id: item[ENTITY_ID] || null,
-              name: item[ENTITY_NAME],
-              status: item[ITEM_STATUS] || '已获得',
-              description: item[ENTITY_DESC] || '',
-            },
-            session,
-            'item'
-          );
-        }
+        if (!item[ENTITY_NAME]) continue;
+        // 防护：只有名字没描述（LLM 引用已有实体但未填写任何新描述）→ 跳过
+        if (!item[ENTITY_DESC]) continue;
+        upsertEntity(
+          patch.inventory,
+          {
+            id: item[ENTITY_ID] || null,
+            name: item[ENTITY_NAME],
+            status: item[ITEM_STATUS] || '已获得',
+            description: item[ENTITY_DESC] || '',
+          },
+          session,
+          'item'
+        );
       }
     }
 

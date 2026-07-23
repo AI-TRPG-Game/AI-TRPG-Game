@@ -6,7 +6,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const { OpenAICompatibleProvider } = await import('./llm/OpenAICompatibleProvider.js');
-const { streamEmitter } = await import('./api/StreamEmitter.js');
 const { createApp } = await import('./api/GameController.js');
 
 const PORT = process.env.PORT || 3001;
@@ -17,7 +16,7 @@ const llmProvider = new OpenAICompatibleProvider({
   model: process.env.LLM_MODEL,
 });
 
-const app = createApp({ llmProvider, streamEmitter });
+const app = createApp({ llmProvider });
 
 app.listen(PORT, () => {
   console.log(`AI-TRPG stateless backend running on http://localhost:${PORT}`);
