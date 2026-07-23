@@ -154,7 +154,7 @@ export const FLOW_MAX_TOKENS = {
   [FlowType.WORLD_GEN]: 4096,
   [FlowType.CHARACTER_GEN]: 8192,         // 思考模式 + 数值计算，需要更大额度（4096 易被思考截断）
   [FlowType.KEY_CHARACTER_GEN]: 8192,     // 同上
-  [FlowType.STORY_OPENING]: 4096,         // 思考 + 叙事
+  [FlowType.STORY_OPENING]: 8192,         // 思考 + 叙事 + 实体更新（Plan B+ 与 NARRATION_I 同 schema，4096 会被截断）
   [FlowType.NARRATION_I]: 8192,           // 思考 + 叙事 + 实体更新，4096 易截断
   [FlowType.NARRATION_II]: 8192,           // 同上
   [FlowType.HISTORY_SUMMARY]: 4096,       // 思考 + 摘要
