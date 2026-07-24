@@ -202,11 +202,13 @@ session.characterInitialStats = null | [
 - `hp_san_changes` 非空，无检定
 - 系统投 delta，按 effect 扣减或增加
 
-**场景 D：检定+伤害**（玩家攻击 NPC / NPC 攻击玩家）
+**场景 D：检定+伤害**（玩家攻击 NPC / NPC 攻击玩家 / 治愈术等）
 - `attr_skill_dice` + `hp_san_changes` 都非空
-- 系统先投检定：
-  - `hp_san_changes[].target == 'player'` → 防御场景，检定**失败**才生效
-  - `hp_san_changes[].target == 'npc_XXX'` → 攻击场景，检定**成功**才生效
+- **触发条件由 `hp_san_changes[].trigger` 字段决定**（不由 target 推断）：
+  - `trigger='skill_success'` → 检定成功时生效（玩家攻击命中、治愈术成功加血）
+  - `trigger='skill_fail'` → 检定失败时生效（玩家防御失败受伤、大失败额外伤害）
+- target 表达"谁受伤"，trigger 表达"什么条件触发"，两者正交
+- 同一条 hp_san_changes 可包含多个条目，分别关联成功/失败（如治愈术成功加血 + 大失败额外伤害）
 
 ### 3.2 DamageResolver 处理流程
 
@@ -222,14 +224,13 @@ session.characterInitialStats = null | [
    → 系统自动生成 hp_san_changes 条目 { target, attr: 'san', effect: 'damage', delta: '1d3'|'1d6', trigger: 'auto' }
    → 然后走步骤 3 的 hp_san_changes 处理流程
 
-3. hp_san_changes 数组按顺序处理每个条目：
-   a. 若有 attr_skill_dice：
-      - target == 'player' → 检定失败才应用
-      - target == 'npc_XXX' → 检定成功才应用
-   b. 若有 sancheck_dice（已自动生成 hp_san_changes）：直接应用
-   c. 若无检定（trigger='auto'或null）：直接应用
-   d. trigger='skill_fail'：检定失败时应用（大失败额外效果）
-   e. trigger='skill_success'：检定成功时应用
+3. hp_san_changes 数组按顺序处理每个条目，**根据 trigger 字段判断是否生效**：
+   a. trigger='auto' 或 null：独立生效（无检定关联），直接应用
+   b. trigger='skill_success'：若有 attr_skill_dice 且检定成功 → 应用；否则跳过
+   c. trigger='skill_fail'：若有 attr_skill_dice 且检定失败 → 应用；否则跳过
+   d. 若有 sancheck_dice（系统已自动生成 hp_san_changes 条目，trigger='auto'）：直接应用
+   注意：同一条 hp_san_changes 可包含 trigger='skill_success' 和 trigger='skill_fail' 的条目，
+         系统根据检定结果只应用对应的条目（如治愈术成功加血 vs 大失败额外伤害）
 
 4. 每个 hp_san_changes 应用：
    - 找到 target 对应的 npc 条目
