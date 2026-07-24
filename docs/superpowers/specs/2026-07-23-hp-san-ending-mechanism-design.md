@@ -110,48 +110,55 @@ npc = {
 
 **prompt 约束**：重要性是暂时的，可因后续剧情升级（background→supporting→key），但 player/key 一旦设定不可降级或变更。
 
-### 2.4 三个 dice 字段 schema
+### 2.4 actions 字段 schema（统一替代三字段）
 
-将现有 `dice` 字段拆分为三个独立字段（原 `dice` 改名 `attr_skill_dice`，新增 `sancheck_dice` 和 `hp_san_changes`）：
+将原 `dice` 字段（及之前设计的 attr_skill_dice/sancheck_dice/hp_san_changes 三字段）统一合并为一个 `actions` 数组。每个 action 自包含"检定+后果"，消除多检定场景下的歧义。
 
 ```javascript
-// attr_skill_dice（原 dice 改名）：属性/技能检定（1d100，只玩家/关键角色）
-attrSkillDiceSchema = {
-  skill_name: string,
-  skill_point: integer (0-100),
-  notation: '1d100',
-  success_rate: integer (0-100),
-  bonus_dice: integer (0-2, default 0),    // 奖励骰数量（多投十位骰取较小）
-  penalty_dice: integer (0-2, default 0),  // 惩罚骰数量（多投十位骰取较大）
+// 变化项（change）统一结构：on_success/on_fail/changes 数组的元素
+changeItem = {
+  target: 'player' | 'npc_XXX',    // 目标（谁的血条变化）
+  attr: 'hp' | 'san',               // 变化属性
+  delta: '1d4',                     // 骰子公式（NdM+K 格式）
+  effect: 'damage' | 'heal',        // 伤害/治疗
 }
 
-// sancheck_dice：SAN 检定专用（1d100 vs SAN）
-sancheckDiceSchema = {
-  target: 'player' | 'npc_XXX',  // 检定目标（player=npc_000，或任意已编号 NPC）
-  san_value: number,              // 目标当前 SAN 值（作为检定阈值）
-}
-
-// hp_san_changes：伤害/治疗数组（可多个来源）
-hpSanChangesSchema = {
-  type: 'array',
-  items: {
-    target: 'player' | 'npc_XXX',    // 目标（谁的血条变化）
-    attr: 'hp' | 'san',               // 变化属性
-    delta: '1d4',                     // 骰子公式
-    effect: 'damage' | 'heal',        // 伤害/治疗
-    trigger: 'auto' | 'skill_fail' | 'skill_success' | null,
-    // auto=独立生效（无检定，如区域/事件影响、NPC加血）
-    // skill_fail=关联检定失败时生效（玩家防御失败）
-    // skill_success=关联检定成功时生效（玩家攻击命中）
-    // null=不关联检定，直接生效
+// actions 数组，每个元素是三种类型之一
+actions: [
+  // 类型1：skill_check（技能/属性检定，1d100 vs skill_point + 惩罚/奖励骰）
+  {
+    type: 'skill_check',
+    skill_name: '斗殴',
+    skill_point: 55,                // 0-100
+    bonus_dice: 0,                  // 0-2，默认 0（多投十位骰取较小）
+    penalty_dice: 0,                // 0-2，默认 0（多投十位骰取较大）
+    on_success: [changeItem],       // 检定成功时生效的变化，空数组=无变化
+    on_fail: [changeItem],          // 检定失败时生效的变化，空数组=无变化
   },
-}
+
+  // 类型2：sancheck（SAN 检定，系统查 target 当前 SAN 作为阈值，自动投 1d3/1d6）
+  {
+    type: 'sancheck',
+    target: 'player'                // 系统自动查 target 的 san 作为检定阈值
+    // 成功→系统自动投 1d3 san damage；失败→自动投 1d6 san damage
+  },
+
+  // 类型3：direct（直接变化，无检定，休息恢复/区域影响/NPC加血等）
+  {
+    type: 'direct',
+    changes: [changeItem]
+  }
+] | null   // null 或不存在=本轮无任何检定/变化
 ```
 
-- 三者可同时出现、单独出现、或全为 null（正常推进无判定）
-- `sancheck_dice` 触发时，系统自动投 dam_dice 1d3（成功）或 1d6（失败），LLM 不需要同时输出 hp_san_changes
-- `hp_san_changes` 可独立出现（HP 伤害、治疗、区域影响等）
-- 删除了原 dam_dice 的 reason 字段（叙事已包含原因，避免 LLM 重复输出）
+**相比三字段设计的精简点**：
+- 三字段（attr_skill_dice + sancheck_dice + hp_san_changes）→ 一个 `actions` 字段
+- `trigger` 字段不再需要（on_success/on_fail 已表达触发条件）
+- `san_value` 不再需要（系统查 target 当前 SAN）
+- `notation` 不再需要（固定 1d100）
+- `success_rate` 不再需要（= skill_point）
+
+**消除歧义的核心**：每个检定的后果自包含在 action 内，不跨字段关联。同一轮可包含多个检定（多个 skill_check、多个 sancheck、或混合），每个检定的后果独立无歧义。
 
 ### 2.5 顶层 hp/san 字段语义变更
 
@@ -186,66 +193,124 @@ session.characterInitialStats = null | [
 
 ## 3. HP/SAN 变化数据流
 
-### 3.1 NARRATION_I 输出的四种场景
+### 3.1 NARRATION_I 输出的场景（基于 actions 字段）
 
 **场景 A：纯技能检定**（如攀爬、聆听）
-- `attr_skill_dice` 非空，其余 null
-- 系统投 1d100 + 惩罚/奖励骰，判定成功等级
-- 无伤害，只输出判定结果
+```javascript
+actions: [
+  { type: 'skill_check', skill_name: '攀爬', skill_point: 60,
+    on_success: [], on_fail: [] }
+]
+```
+- on_success/on_fail 都为空 = 无 HP/SAN 变化，只输出判定结果
 
 **场景 B：SAN 检定**（目击恐怖事物）
-- `sancheck_dice` 非空
-- 系统投 1d100 vs san_value，成功投 1d3 SAN 伤害，失败投 1d6 SAN 伤害
-- 系统自动生成 hp_san_changes（LLM 不需要输出）
+```javascript
+actions: [
+  { type: 'sancheck', target: 'player' }
+]
+```
+- 系统查 player 当前 SAN 作为阈值，投 1d100
+- 成功投 1d3 SAN 伤害，失败投 1d6 SAN 伤害（系统自动计算，LLM 不输出伤害）
 
 **场景 C：直接伤害/治疗**（物理攻击、休息恢复、区域影响）
-- `hp_san_changes` 非空，无检定
-- 系统投 delta，按 effect 扣减或增加
+```javascript
+actions: [
+  { type: 'direct', changes: [
+      { target: 'player', attr: 'san', delta: '1d3', effect: 'heal' }
+  ]}
+]
+```
+- 无检定，系统投 delta，按 effect 扣减或增加
 
 **场景 D：检定+伤害**（玩家攻击 NPC / NPC 攻击玩家 / 治愈术等）
-- `attr_skill_dice` + `hp_san_changes` 都非空
-- **触发条件由 `hp_san_changes[].trigger` 字段决定**（不由 target 推断）：
-  - `trigger='skill_success'` → 检定成功时生效（玩家攻击命中、治愈术成功加血）
-  - `trigger='skill_fail'` → 检定失败时生效（玩家防御失败受伤、大失败额外伤害）
-- target 表达"谁受伤"，trigger 表达"什么条件触发"，两者正交
-- 同一条 hp_san_changes 可包含多个条目，分别关联成功/失败（如治愈术成功加血 + 大失败额外伤害）
+```javascript
+// D1: 玩家攻击 NPC（成功才造成伤害）
+actions: [
+  { type: 'skill_check', skill_name: '斗殴', skill_point: 55,
+    on_success: [{ target: 'npc_002', attr: 'hp', delta: '1d8', effect: 'damage' }],
+    on_fail: [] }
+]
+
+// D2: NPC 攻击玩家（玩家闪避，失败才受伤）
+actions: [
+  { type: 'skill_check', skill_name: '闪避', skill_point: 45, penalty_dice: 2,
+    on_success: [],
+    on_fail: [{ target: 'player', attr: 'hp', delta: '1d6', effect: 'damage' }] }
+]
+
+// D3: 治愈术（成功加血 + 大失败额外伤害）
+actions: [
+  { type: 'skill_check', skill_name: '急救', skill_point: 40,
+    on_success: [{ target: 'player', attr: 'hp', delta: '1d3', effect: 'heal' }],
+    on_fail: [{ target: 'player', attr: 'hp', delta: '1d4', effect: 'damage' }] }
+]
+```
+
+**场景 E：多检定组合**（原三字段设计无法表达，actions 无歧义覆盖）
+```javascript
+// E1: 玩家攻击NPC + 同时闪避另一NPC攻击
+actions: [
+  { type: 'skill_check', skill_name: '斗殴', skill_point: 55,
+    on_success: [{ target: 'npc_002', attr: 'hp', delta: '1d8', effect: 'damage' }],
+    on_fail: [] },
+  { type: 'skill_check', skill_name: '闪避', skill_point: 45,
+    on_success: [],
+    on_fail: [{ target: 'player', attr: 'hp', delta: '1d6', effect: 'damage' }] }
+]
+
+// E2: 群体 sancheck
+actions: [
+  { type: 'sancheck', target: 'player' },
+  { type: 'sancheck', target: 'npc_001' }
+]
+
+// E3: sancheck + 无伤害技能检定
+actions: [
+  { type: 'sancheck', target: 'player' },
+  { type: 'skill_check', skill_name: '神秘学', skill_point: 30,
+    on_success: [], on_fail: [] }
+]
+```
 
 ### 3.2 DamageResolver 处理流程
 
-用户确认掷骰后（confirmDice），DamageResolver 按顺序处理：
+用户确认掷骰后（confirmDice），DamageResolver 按顺序处理 `actions` 数组：
 
 ```
-1. attr_skill_dice 非空 → 投 1d100 + 惩罚/奖励骰，判定成功等级
-   （CoC 7e：奖励骰取较小结果，惩罚骰取较大结果）
+对 actions 数组中的每个 action 按顺序处理：
 
-2. sancheck_dice 非空 → 投 1d100 vs san_value
-   → 成功：自动投 1d3 SAN 伤害
-   → 失败：自动投 1d6 SAN 伤害
-   → 系统自动生成 hp_san_changes 条目 { target, attr: 'san', effect: 'damage', delta: '1d3'|'1d6', trigger: 'auto' }
-   → 然后走步骤 3 的 hp_san_changes 处理流程
+1. type='skill_check'：
+   a. 投 1d100 + 惩罚/奖励骰（十位骰取较大/较小）
+   b. 判定成功等级（大成功/极难成功/困难成功/一般成功/一般失败/大失败）
+   c. 根据成功/失败，应用对应的 on_success / on_fail 变化项
+      （成功→应用 on_success，失败→应用 on_fail）
 
-3. hp_san_changes 数组按顺序处理每个条目，**根据 trigger 字段判断是否生效**：
-   a. trigger='auto' 或 null：独立生效（无检定关联），直接应用
-   b. trigger='skill_success'：若有 attr_skill_dice 且检定成功 → 应用；否则跳过
-   c. trigger='skill_fail'：若有 attr_skill_dice 且检定失败 → 应用；否则跳过
-   d. 若有 sancheck_dice（系统已自动生成 hp_san_changes 条目，trigger='auto'）：直接应用
-   注意：同一条 hp_san_changes 可包含 trigger='skill_success' 和 trigger='skill_fail' 的条目，
-         系统根据检定结果只应用对应的条目（如治愈术成功加血 vs 大失败额外伤害）
+2. type='sancheck'：
+   a. 系统查 target 当前 san 作为阈值
+   b. 投 1d100 vs san，判定成功/失败
+   c. 成功→系统自动投 1d3 san damage；失败→自动投 1d6 san damage
+   d. 应用伤害到 target 的 san
 
-4. 每个 hp_san_changes 应用：
+3. type='direct'：
+   a. 对 changes 数组中每个变化项投 delta
+   b. 按 effect 应用伤害/治疗
+
+4. 每个变化项应用：
    - 找到 target 对应的 npc 条目
    - effect='damage' → hp/san = max(0, min(maxHp, current - damage))
    - effect='heal' → hp/san = max(0, min(maxHp, current + heal))
    - 生成状态词（见 3.3）
 
-5. 检查清零：
+5. 所有 actions 处理完毕后，检查清零：
    - 玩家（npc_000）hp≤0 或 san≤0 → 触发结局流程（第 4 节）
    - NPC hp≤0 或 san≤0 → 标记 status='departed'，生成状态词
 
 6. 生成系统判定消息（推送到前端 + LLM）：
+   【使用斗殴技能（技能点55），判定结果23，困难成功】
+   【npc_002 受到1d8=6点HP伤害 → 受重伤】
    【使用闪避技能（技能点45，2惩罚骰），判定结果78，一般失败】
    【SAN检定（当前SAN 70），判定结果45，成功，损失1d3=2点SAN → 头晕目眩】
-   【受到1d4=3点HP伤害 → 轻微受伤】
 
 7. 调用 NARRATION_II，让 LLM 根据系统判定+状态词写剧情
 ```
@@ -294,10 +359,10 @@ LLM 据此输出 NARRATION_II：
 ```
 narration: "触手抽中你的肩膀，一阵剧痛传来...(描写伤害和状态词的叙事体现)"
 hp: null, san: null  // LLM 固定填 null，系统已计算完毕
-attr_skill_dice: null, sancheck_dice: null, hp_san_changes: null  // 本轮无新判定
+actions: null  // 本轮无新判定
 ```
 
-NARRATION_II 中若再次出现 dice 字段，走递归 dice 分支（现有机制）。
+NARRATION_II 中若 actions 非空，走递归 dice 分支（现有机制）。
 
 ---
 
@@ -438,10 +503,10 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 |---|---|
 | `GameSession.js` | 新增 `storyOpeningCache`、`characterInitialStats`；npcs 数组元素新增 hp/san/maxHp/maxSan/visibility/status 字段；删除 playerStats（改用 npc_000 的 hp/san） |
 | `DiceService.js` | 扩展为支持通用 `NdM+K` 公式解析与投掷（现有仅支持 1d100）；新增 `rollFormula(formula)` 方法；新增惩罚/奖励骰计算（1d100 拆为十位骰+个位骰，惩罚骰多投十位骰取较大，奖励骰取较小，最多 2 个） |
-| `NarrativeSchema.js` | `DICE` 改名 `ATTR_SKILL_DICE`；新增 `SANCHECK_DICE`、`HP_SAN_CHANGES`、`BONUS_DICE`、`PENALTY_DICE`、`TRIGGER`、`TARGET`、`ATTR_FIELD`、`DELTA`、`EFFECT`、`ENDING_TYPE`、`ENDING_TEXT` 常量；`HP`/`SAN` 顶层字段语义变更（LLM 固定填 null） |
-| `StrictSchemaRegistry.js` | `diceSchema` 改名 `attrSkillDiceSchema` 并新增 bonus_dice/penalty_dice；新增 `sancheckDiceSchema`、`hpSanChangesSchema`、`endingGenStrictSchema`、`buildEndingGenStrictSchema`；`npcItemSchema` 新增 hp/san/maxHp/maxSan/visibility/status；`FLOW_FUNCTION_NAMES` 新增 output_ending（第5个函数） |
+| `NarrativeSchema.js` | `DICE` 改名 `ACTIONS`；新增 `ACTIONS`、`SKILL_CHECK`、`SANCHECK`、`DIRECT`、`ON_SUCCESS`、`ON_FAIL`、`CHANGES`、`BONUS_DICE`、`PENALTY_DICE`、`TARGET`、`ATTR_FIELD`、`DELTA`、`EFFECT`、`ENDING_TYPE`、`ENDING_TEXT` 常量；`HP`/`SAN` 顶层字段语义变更（LLM 固定填 null） |
+| `StrictSchemaRegistry.js` | `diceSchema` 替换为 `actionsSchema`（含 skill_check/sancheck/direct 三种类型的 oneOf）；新增 `changeItemSchema`（target/attr/delta/effect）；新增 `endingGenStrictSchema`、`buildEndingGenStrictSchema`；`npcItemSchema` 新增 hp/san/maxHp/maxSan/visibility/status；`FLOW_FUNCTION_NAMES` 新增 output_ending（第5个函数） |
 | `EntityUpdater.js` | 删除 `updatePlayerStats`（正则替换）；`mergeEntity` 增加 hp/san/visibility/status 处理逻辑（visibility 首次锁定、importance 可升级）；玩家/关键角色合并到 npcs 数组的逻辑 |
-| `OutputProcessor.js` | Dice 分支检测扩展为检测 attr_skill_dice/sancheck_dice/hp_san_changes 任一非空；调用 DamageResolver |
+| `OutputProcessor.js` | Dice 分支检测改为检测 `actions` 字段非空；调用 DamageResolver |
 | `GameOrchestrator.js` | `_executeDice` 重构：注入 DamageResolver + EndingService；`saveCharacter` 时初始化 npc_000 的 hp/san/maxHp/maxSan；`openStory` 完成后缓存 storyOpeningCache + characterInitialStats；新增 `restartStory` 方法 |
 | `PromptTemplateRegistry.js` | NARRATION_I/II prompt 注入当前 HP/SAN 状态；importance 可变说明；新增 ENDING_GEN system instruction |
 | `InputAssembler.js` | `_buildNarrationI/II Messages` 注入角色状态块；ENDING_GEN 的 message 组装 |
@@ -461,11 +526,12 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 ### 5.4 测试覆盖
 
 **DamageResolver 单元测试**：
-- 四种场景（A/B/C/D）的正确处理
+- 五种场景（A/B/C/D/E）的正确处理
 - 惩罚/奖励骰计算
 - 状态词映射边界值
 - HP/SAN 钳制
 - 清零检测（玩家 vs NPC）
+- 多检定组合（场景E）的顺序处理与独立性
 
 **EndingService 单元测试**：
 - 结局触发条件
@@ -483,11 +549,11 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 
 ### 6.1 关键决策
 
-1. **系统全权计算伤害**：LLM 只输出 dice 字段和 hp_san_changes，系统计算数值并更新 HP/SAN，LLM 通过 prompt 知道当前数值但固定填 null
-2. **三个 dice 字段**：attr_skill_dice（属性/技能检定）、sancheck_dice（SAN 检定）、hp_san_changes（伤害/治疗数组）
+1. **系统全权计算伤害**：LLM 只输出 actions 字段，系统计算数值并更新 HP/SAN，LLM 通过 prompt 知道当前数值但固定填 null
+2. **统一 actions 字段**：三字段（attr_skill_dice/sancheck_dice/hp_san_changes）合并为一个 actions 数组，每个 action 自包含"检定+后果"，消除多检定歧义
 3. **统一到 npcs 数组**：玩家=npc_000，关键角色=npc_001~00X，普通 NPC=npc_00(X+1)+，HP/SAN 逻辑统一一套
 4. **惩罚/奖励骰替代 NPC 技能值**：NPC 不检定，强弱通过惩罚/奖励骰体现（范围 0-2，机制为多投十位骰取较大/较小）
-5. **trigger 字段**：auto/skill_fail/skill_success/null，覆盖攻击/防御/独立伤害/大失败额外效果等场景
+5. **on_success/on_fail 替代 trigger**：变化项的触发条件由 action 内的 on_success/on_fail 表达，不再需要 trigger 字段
 6. **visibility 首次锁定**：避免 LLM 随意切换可见性
 7. **importance 可升级**：background→supporting→key，但 player/key 锁定
 8. **结局仅限玩家**：NPC 清零只标记 departed，不触发结局
