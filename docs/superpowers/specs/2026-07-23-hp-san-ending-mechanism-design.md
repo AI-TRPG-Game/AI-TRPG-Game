@@ -39,6 +39,18 @@
 - **临时疯狂**：单次损失 ≥5 SAN → 立即发作
 - **永久疯狂**：SAN = 0 → 撕卡
 - **惩罚/奖励骰**：每有一个惩罚骰取较大结果，奖励骰取较小结果，最多 2 个（本设计放宽到 0-6）
+- **对抗检定**：双方都投检定，比较成功等级（如角力、说服）。本设计**放弃对抗检定**，用惩罚/奖励骰 + delta 公式两层调节替代：
+  - **检定层**：强弱通过惩罚/奖励骰体现（强者攻击给玩家惩罚骰，弱者给奖励骰）
+  - **伤害层**：通过 `hp_san_changes[].delta` 公式大小体现（老人空手 1d3，壮汉 1d6+1，异形 2d6）
+
+### 1.4 骰子公式格式
+
+`hp_san_changes[].delta` 和现有 DiceService 的 notation 字段统一使用 **NdM+K** 格式字符串：
+- `1d3`、`1d4`、`1d6`、`1d8`、`1d10`、`1d100`（标准骰）
+- `2d6+1`、`1d4+2`（带加成）
+- `1d3`（SAN check 成功伤害）、`1d6`（SAN check 失败伤害）
+
+现有 DiceService 只支持 1d100，需扩展为支持通用 `NdM+K` 公式解析与投掷。
 
 ---
 
@@ -424,6 +436,7 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 | 模块 | 修改内容 |
 |---|---|
 | `GameSession.js` | 新增 `storyOpeningCache`、`characterInitialStats`；npcs 数组元素新增 hp/san/maxHp/maxSan/visibility/status 字段；删除 playerStats（改用 npc_000 的 hp/san） |
+| `DiceService.js` | 扩展为支持通用 `NdM+K` 公式解析与投掷（现有仅支持 1d100）；新增 `rollFormula(formula)` 方法；新增惩罚/奖励骰计算（多投十位骰取较大/较小） |
 | `NarrativeSchema.js` | `DICE` 改名 `ATTR_SKILL_DICE`；新增 `SANCHECK_DICE`、`HP_SAN_CHANGES`、`BONUS_DICE`、`PENALTY_DICE`、`TRIGGER`、`TARGET`、`ATTR_FIELD`、`DELTA`、`EFFECT`、`ENDING_TYPE`、`ENDING_TEXT` 常量；`HP`/`SAN` 顶层字段语义变更（LLM 固定填 null） |
 | `StrictSchemaRegistry.js` | `diceSchema` 改名 `attrSkillDiceSchema` 并新增 bonus_dice/penalty_dice；新增 `sancheckDiceSchema`、`hpSanChangesSchema`、`endingGenStrictSchema`、`buildEndingGenStrictSchema`；`npcItemSchema` 新增 hp/san/maxHp/maxSan/visibility/status；`FLOW_FUNCTION_NAMES` 新增 output_ending（第5个函数） |
 | `EntityUpdater.js` | 删除 `updatePlayerStats`（正则替换）；`mergeEntity` 增加 hp/san/visibility/status 处理逻辑（visibility 首次锁定、importance 可升级）；玩家/关键角色合并到 npcs 数组的逻辑 |
