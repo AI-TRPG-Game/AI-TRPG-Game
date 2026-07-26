@@ -23,6 +23,82 @@ export class DiceService {
     return crypto.randomInt(1, sides + 1);
   }
 
+  /**
+   * 通用骰子公式投掷（支持 NdM+K 格式）。
+   * @param {string} formula - 如 '1d6', '2d6+1', '1d4+2', '1d100'
+   * @returns {number} 投掷结果总和（含加成）
+   */
+  rollFormula(formula) {
+    if (!formula || typeof formula !== 'string') {
+      throw new Error(`无效的骰子公式: ${formula}`);
+    }
+    const match = formula.trim().match(/^(\d+)d(\d+)(?:\+(\d+))?$/i);
+    if (!match) {
+      throw new Error(`无法解析骰子公式: ${formula}，仅支持 NdM+K 格式`);
+    }
+    const count = parseInt(match[1], 10);
+    const sides = parseInt(match[2], 10);
+    const bonus = match[3] ? parseInt(match[3], 10) : 0;
+    if (count < 1 || count > 100) throw new Error(`骰子数量超限: ${count}`);
+    if (sides < 2 || sides > 1000) throw new Error(`骰子面数超限: ${sides}`);
+
+    let total = bonus;
+    for (let i = 0; i < count; i++) {
+      total += this.rollDie(sides);
+    }
+    return total;
+  }
+
+  /**
+   * 1d100 投掷 + 惩罚/奖励骰（CoC 7e 规则）。
+   * 1d100 = 十位骰(d10×10) + 个位骰(d10)。
+   * 奖励骰：多投十位骰，取较小十位（让结果更易成功）。
+   * 惩罚骰：多投十位骰，取较大十位（让结果更难成功）。
+   * 官方建议最多 2 个，本方法钳制到 0-2。
+   *
+   * @param {number} bonusDice - 奖励骰数量（0-2，超出钳制）
+   * @param {number} penaltyDice - 惩罚骰数量（0-2，超出钳制）
+   * @returns {{value: number, tens: number[], ones: number, usedTensIndex: number}}
+   *   - value: 最终 1d100 结果
+   *   - tens: 所有十位骰结果（含原始那个，用于诊断展示）
+   *   - ones: 个位骰结果
+   *   - usedTensIndex: 最终使用的十位骰在 tens 数组中的索引
+   */
+  rollWithBonusPenalty(bonusDice = 0, penaltyDice = 0) {
+    const bonus = Math.min(Math.max(bonusDice, 0), 2);
+    const penalty = Math.min(Math.max(penaltyDice, 0), 2);
+    const extraTens = Math.max(bonus, penalty); // 额外十位骰数量
+
+    // 投十位骰（0-9，代表 00,10,20...90）+ 个位骰（1-10，10 代表 0）
+    const tens = [];
+    for (let i = 0; i <= extraTens; i++) {
+      tens.push(this.rollDie(10) - 1); // 0-9
+    }
+    const ones = this.rollDie(10) % 10; // 0-9（10%10=0）
+
+    // 选择使用的十位骰
+    let usedTensIndex = 0;
+    if (bonus > 0) {
+      // 奖励骰：取最小十位
+      let minVal = tens[0];
+      for (let i = 1; i < tens.length; i++) {
+        if (tens[i] < minVal) { minVal = tens[i]; usedTensIndex = i; }
+      }
+    } else if (penalty > 0) {
+      // 惩罚骰：取最大十位
+      let maxVal = tens[0];
+      for (let i = 1; i < tens.length; i++) {
+        if (tens[i] > maxVal) { maxVal = tens[i]; usedTensIndex = i; }
+      }
+    }
+
+    const rawValue = tens[usedTensIndex] * 10 + ones;
+    // CoC 7e 规则：十位骰=0(即 00) + 个位骰=0(即 0) 时，结果应为 100（大失败），而非 0
+    // 触发概率 1%，若不修正会将"大失败"误判为"大成功"（evaluateSuccess 中 roll===1 返回大成功）
+    const value = rawValue === 0 ? 100 : rawValue;
+    return { value, tens, ones, usedTensIndex };
+  }
+
   rollAll(requests) {
     const results = [];
     for (const req of requests) {

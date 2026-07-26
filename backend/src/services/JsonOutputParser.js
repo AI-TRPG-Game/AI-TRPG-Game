@@ -14,7 +14,7 @@
  *   - 字符串值内输出未转义双引号（strict schema 校验不到的细节错误）
  */
 import { hasCardKey } from '../domain/CharacterCardSchema.js';
-import { hasDiceField, NARRATION, SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION } from '../domain/NarrativeSchema.js';
+import { hasActionsField, NARRATION, SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION } from '../domain/NarrativeSchema.js';
 
 const THINK_OPEN_TAG = '<' + 'think>';
 const THINK_CLOSE_TAG = '<' + '/think>';
@@ -207,9 +207,9 @@ export class JsonOutputParser {
     return null; // 括号未闭合
   }
 
-  /** 检测是否包含 dice 字段 */
-  hasDice(parsed) {
-    return hasDiceField(parsed);
+  /** 检测是否包含 actions 字段（替代原 hasDice） */
+  hasActions(parsed) {
+    return hasActionsField(parsed);
   }
 
   /** 检测是否包含 narration 字段 */

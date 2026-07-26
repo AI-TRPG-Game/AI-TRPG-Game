@@ -2,6 +2,7 @@ import { FlowType, ChatRole, ChatEntryType } from '../domain/enums.js';
 import { promptTemplateRegistry, FLOW_TEMPERATURE, FLOW_MAX_TOKENS, FLOW_THINKING, FLOW_REASONING_EFFORT, FLOW_MODEL, FLOW_STOP } from './PromptTemplateRegistry.js';
 import { necessarySettingsBuilder } from './NecessarySettingsBuilder.js';
 import { buildStrictTools, FLOW_FUNCTION_NAMES } from '../domain/StrictSchemaRegistry.js';
+import { endingService } from './EndingService.js';
 
 // 注意：思考模式下不支持 tool_choice（DeepSeek API 会返回 400）
 // buildStrictTools 返回的 toolChoice 字段已废弃，不再透传给 Provider
@@ -14,7 +15,7 @@ import { buildStrictTools, FLOW_FUNCTION_NAMES } from '../domain/StrictSchemaReg
  * - summary → assistant
  *
  * 方案 B+ 改造：KP 消息若携带 parsed + flowType，则构造为：
- *   {role: assistant, content: null, reasoning_content: ..., tool_calls: [{id, type: 'function', function: {name, arguments: JSON}}]}
+ *   {role: assistant, content: '', reasoning_content: ..., tool_calls: [{id, type: 'function', function: {name, arguments: JSON}}]}
  *   {role: tool, tool_call_id: id, content: ''}
  * 这样 LLM 看到的历史 assistant 消息格式 = strict 模式要求它输出的格式，
  * 强化格式一致性引导，减少"LLM 不调 function 直接输出文本"的概率。
@@ -29,11 +30,10 @@ import { buildStrictTools, FLOW_FUNCTION_NAMES } from '../domain/StrictSchemaReg
  * 重要：DeepSeek 官方要求"思考模式 + 工具调用场景下，后续轮次必须回传 reasoning_content"
  * reasoning_content 注入到 assistant 消息（tool_calls 同一条），不注入 tool 消息。
  *
- * reasoning_content 匹配策略：按 kp 出现顺序与 reasoningContents 队列顺序一一对应（FIFO）
+ * reasoning_content 匹配策略：直接从 chatRecord 条目的 reasoningContent 字段读取（1:1 精确匹配）。
+ * 不再使用独立队列 FIFO 匹配，避免 ACTIONS 分支等场景导致队列错位。
  */
-function chatRecordToMessages(chatRecord, reasoningContents = []) {
-  const reasoningQueue = [...reasoningContents]; // 按 push 顺序 FIFO
-  let reasoningIdx = 0;
+function chatRecordToMessages(chatRecord) {
   let toolCallCounter = 0;
 
   const messages = [];
@@ -62,7 +62,10 @@ function chatRecordToMessages(chatRecord, reasoningContents = []) {
 
       const assistantMsg = {
         role: 'assistant',
-        content: null,
+        // DeepSeek 官方文档：工具调用轮次 content 为空字符串 ''（非 null）
+        // 官方示例 response.choices[0].message.content 在 tool_calls 轮次返回 ''
+        // 使用 null 可能导致 API 400（content 字段类型不匹配）
+        content: '',
         tool_calls: [{
           id: toolCallId,
           type: 'function',
@@ -70,10 +73,10 @@ function chatRecordToMessages(chatRecord, reasoningContents = []) {
         }],
       };
 
-      // 注入 reasoning_content（FIFO 匹配，与改造前一致）
-      if (reasoningIdx < reasoningQueue.length) {
-        assistantMsg.reasoning_content = reasoningQueue[reasoningIdx].reasoningContent;
-        reasoningIdx++;
+      // 注入 reasoning_content（直接从条目读取，1:1 精确匹配）
+      // 官方要求：工具调用轮次的 reasoning_content 必须回传，否则 API 400
+      if (entry.reasoningContent) {
+        assistantMsg.reasoning_content = entry.reasoningContent;
       }
 
       messages.push(assistantMsg);
@@ -88,13 +91,9 @@ function chatRecordToMessages(chatRecord, reasoningContents = []) {
     }
 
     // 兜底：无 parsed 的 KP / SUMMARY / 旧数据 → content=文本
+    // 注意：无 tool_calls 的 assistant 消息回传 reasoning_content 会被 API 忽略（官方文档），
+    //       故不注入，避免浪费 token
     const msg = { role, content: entry.content };
-
-    // kp 角色的 assistant 消息：按 FIFO 顺序匹配 reasoning_content
-    if (entry.role === ChatRole.KP && reasoningIdx < reasoningQueue.length) {
-      msg.reasoning_content = reasoningQueue[reasoningIdx].reasoningContent;
-      reasoningIdx++;
-    }
 
     messages.push(msg);
   }
@@ -112,9 +111,6 @@ export class InputAssembler {
 
     const messages = [{ role: 'system', content: template.systemInstruction }];
 
-    // 思考模式 + 工具调用场景下，回传 reasoning_content（官方要求）
-    const reasoningContents = session.recentReasoningContents || [];
-
     switch (flowType) {
       case FlowType.WORLD_GEN:
         this._buildWorldGenMessages(messages, session, userText);
@@ -129,13 +125,16 @@ export class InputAssembler {
         this._buildStoryOpeningMessages(messages, session);
         break;
       case FlowType.NARRATION_I:
-        this._buildNarrationIMessages(messages, session, userText, reasoningContents);
+        this._buildNarrationIMessages(messages, session, userText);
         break;
       case FlowType.NARRATION_II:
-        this._buildNarrationIIMessages(messages, session, reasoningContents);
+        this._buildNarrationIIMessages(messages, session);
         break;
       case FlowType.HISTORY_SUMMARY:
-        this._buildHistorySummaryMessages(messages, session, reasoningContents);
+        this._buildHistorySummaryMessages(messages, session);
+        break;
+      case FlowType.ENDING_GEN:
+        this._buildEndingGenMessages(messages, session);
         break;
       default:
         throw new Error(`Unsupported flow type: ${flowType}`);
@@ -174,19 +173,21 @@ export class InputAssembler {
 
   // ── 人物设定 ──
   _buildCharacterGenMessages(messages, session, userText) {
-    // 世界观描述追加到 system 消息末尾（BASE_INTRO 保持在最前面）
-    if (session.worldSettings) {
-      messages[0].content += `\n\n世界观描述如下：\n${session.worldSettings}`;
-    }
-
+    // 世界观描述作为 user message 注入（不修改 system message，保持 cache 命中）
     const history = session.setupHistory.character || [];
 
     if (history.length === 0) {
-      // 初次轮次：system + user prompt（纯用户输入，不加额外前缀）
-      messages.push({ role: 'user', content: userText });
+      // 初次轮次：将世界观作为上下文前缀，与用户输入合并为一条 user message
+      const worldContext = session.worldSettings
+        ? `世界观描述：\n${session.worldSettings}\n\n${userText}`
+        : userText;
+      messages.push({ role: 'user', content: worldContext });
     } else {
-      // 调整轮次：system + 首次用户 prompt + 历史对话
+      // 调整轮次：世界观作为独立 user message，后接历史对话
       // 注意：历史最后一条已是本轮用户输入（由 handleMessage 提前写入），无需再 push
+      if (session.worldSettings) {
+        messages.push({ role: 'user', content: `世界观描述：\n${session.worldSettings}` });
+      }
       for (let i = 0; i < history.length; i++) {
         const entry = history[i];
         const role = entry.role === ChatRole.PLAYER ? 'user' : 'assistant';
@@ -197,10 +198,12 @@ export class InputAssembler {
 
   // ── 关键角色设定 ──
   _buildKeyCharacterGenMessages(messages, session, userText) {
-    // 世界观和玩家设定追加到 system 消息末尾（BASE_INTRO 保持在最前面）
-    messages[0].content += `\n\n世界观描述如下：\n${session.worldSettings}\n\n玩家设定如下：\n${session.player}`;
+    // 世界观+玩家设定+已有角色作为 user message 注入（不修改 system message，保持 cache 命中）
+    const contextParts = [];
+    if (session.worldSettings) contextParts.push(`世界观描述：\n${session.worldSettings}`);
+    if (session.player) contextParts.push(`玩家设定：\n${session.player}`);
 
-    // 将已邀请的关键角色档案注入 prompt，并要求 LLM 不重复
+    // 已邀请的关键角色档案注入，要求 LLM 不重复
     const existingKeyChars = [];
     for (let i = 0; i < session.keyCharacterIndex; i++) {
       if (session.keyCharacters[i]) {
@@ -208,14 +211,20 @@ export class InputAssembler {
       }
     }
     if (existingKeyChars.length > 0) {
-      messages[0].content += `\n\n已创建的关键角色如下：\n${existingKeyChars.join('\n---\n')}\n\n注意：新角色不能与以上已有角色完全重复。`;
+      contextParts.push(`已创建的关键角色：\n${existingKeyChars.join('\n---\n')}\n注意：新角色不能与以上已有角色完全重复。`);
     }
 
     const history = session.getCurrentKeyCharSetupHistory();
 
     if (history.length === 0) {
-      messages.push({ role: 'user', content: userText });
+      const context = contextParts.length > 0
+        ? contextParts.join('\n\n') + '\n\n' + userText
+        : userText;
+      messages.push({ role: 'user', content: context });
     } else {
+      if (contextParts.length > 0) {
+        messages.push({ role: 'user', content: contextParts.join('\n\n') });
+      }
       for (let i = 0; i < history.length; i++) {
         const entry = history[i];
         const role = entry.role === ChatRole.PLAYER ? 'user' : 'assistant';
@@ -238,49 +247,54 @@ export class InputAssembler {
   }
 
   // ── 叙述I ──
-  _buildNarrationIMessages(messages, session, userText, reasoningContents = []) {
+  _buildNarrationIMessages(messages, session, userText) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
       content: this._buildFullSettingsContext(session),
     });
 
+    // 注入角色 HP/SAN/属性 状态（追加到第一个 user message，不修改 system message）
+    // 设计：system message 必须完全静态以命中 DeepSeek prefix cache
+    const statusBlock = this._buildCharacterStatusBlock(session);
+    if (statusBlock) {
+      messages[1].content += '\n\n' + statusBlock;
+    }
+
     // 历史对话（含 userText，handleMessage 已将其写入 chatRecord）
     // 注意：applyNarrative 已把 narration + options 合并为一条 assistant 消息，
     //       无需再单独注入 optionBuffer
     // 关键修复：思考模式 + 工具调用场景下，kp assistant 消息必须回传 reasoning_content
-    const historyMsgs = chatRecordToMessages(session.chatRecord, reasoningContents);
+    const historyMsgs = chatRecordToMessages(session.chatRecord);
     for (const m of historyMsgs) {
       messages.push(m);
     }
   }
 
   // ── 叙述II ──
-  _buildNarrationIIMessages(messages, session, reasoningContents = []) {
+  _buildNarrationIIMessages(messages, session) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
       content: this._buildFullSettingsContext(session),
     });
 
-    // 历史对话（含 dice 消息和系统投掷结果）
-    const historyMsgs = chatRecordToMessages(session.chatRecord, reasoningContents);
-    for (const m of historyMsgs) {
-      messages.push(m);
+    // 注入角色 HP/SAN/属性 状态（追加到第一个 user message，不修改 system message）
+    const statusBlock = this._buildCharacterStatusBlock(session);
+    if (statusBlock) {
+      messages[1].content += '\n\n' + statusBlock;
     }
 
-    // 追加提示 —— 合并到最后一个 user 消息末尾，避免连续两个 user
-    const appendText = '\n请根据投掷结果推进剧情，回应要模仿游戏口吻。';
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg && lastMsg.role === 'user') {
-      lastMsg.content += appendText;
-    } else {
-      messages.push({ role: 'user', content: appendText.trim() });
+    // 历史对话（含 dice 消息和系统投掷结果）
+    // system instruction 已说明"根据系统判定结果推进剧情"，不再追加额外提示
+    const historyMsgs = chatRecordToMessages(session.chatRecord);
+    for (const m of historyMsgs) {
+      messages.push(m);
     }
   }
 
   // ── 历史总结 ──
-  _buildHistorySummaryMessages(messages, session, reasoningContents = []) {
+  _buildHistorySummaryMessages(messages, session) {
     // 必要设定
     const settings = necessarySettingsBuilder.build(session);
     messages.push({ role: 'user', content: settings });
@@ -288,11 +302,93 @@ export class InputAssembler {
     // 历史对话（除最新两条外）
     const summaryRecords = session.chatRecord.slice(0, -2);
     if (summaryRecords.length > 0) {
-      const historyMsgs = chatRecordToMessages(summaryRecords, reasoningContents);
+      const historyMsgs = chatRecordToMessages(summaryRecords);
       for (const m of historyMsgs) {
         messages.push(m);
       }
     }
+  }
+
+  // ── 结局生成 ──
+  _buildEndingGenMessages(messages, session) {
+    // 注入世界观和玩家设定
+    const context = this._buildFullSettingsContext(session);
+    messages.push({ role: 'user', content: context });
+
+    // 注入故事开幕缓存（让 LLM 知道故事的起点）
+    if (session.storyOpeningCache?.parsed?.narration) {
+      messages.push({
+        role: 'user',
+        content: `故事开幕：\n${session.storyOpeningCache.parsed.narration}`,
+      });
+    }
+
+    // 历史对话
+    const historyMessages = chatRecordToMessages(session.chatRecord);
+    for (const m of historyMessages) {
+      messages.push(m);
+    }
+
+    // 结局指示
+    const player = session.npcs.find(n => n.id === 'npc_000');
+    const endingType = endingService.getEndingType(player);
+    messages.push({
+      role: 'user',
+      content: `玩家${endingType === 'death' ? 'HP 归零' : 'SAN 归零'}，请生成 ${endingType} 类型的结局文本。`,
+    });
+  }
+
+  /**
+   * 构建角色 HP/SAN/属性 状态块，注入到 prompt 中。
+   * 格式：
+   * 【当前角色状态】
+   * 玩家（npc_000）：HP 8/11，SAN 65/70
+   * 关键角色（npc_001 · 阿史德）：HP 10/10，SAN 55/60，属性：力量50/敏捷60/...
+   * 普通NPC（npc_002 · 酒肆老板）：HP 6/8，SAN 50/50
+   * 隐藏NPC（npc_003 · 神秘人）：HP ??/??，SAN ??/??，属性 ??（已隐藏）
+   * 已退场：npc_004 · 亡灵（已退场）
+   */
+  _buildCharacterStatusBlock(session) {
+    if (!session.npcs || session.npcs.length === 0) return '';
+
+    const lines = ['【当前角色状态】'];
+    for (const npc of session.npcs) {
+      const name = npc.name || npc.id;
+      let label;
+      if (npc.id === 'npc_000') {
+        label = `玩家（${npc.id}）`;
+      } else if (npc.importance === 'key') {
+        label = `关键角色（${npc.id} · ${name}）`;
+      } else {
+        label = `${name}（${npc.id}）`;
+      }
+
+      // departed 的 NPC
+      if (npc.status === 'departed') {
+        lines.push(`${label}：已退场`);
+        continue;
+      }
+
+      // hidden 的 NPC：HP/SAN/属性全部显示 ??
+      if (npc.visibility === 'hidden') {
+        lines.push(`${label}：HP ??/??，SAN ??/??，属性 ??（已隐藏）`);
+        continue;
+      }
+
+      // 正常显示：HP/SAN + 属性（仅 key 角色有 attributes）
+      const hpStr = npc.hp != null ? `${npc.hp}/${npc.maxHp ?? '?'}` : '?';
+      const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
+      let line = `${label}：HP ${hpStr}，SAN ${sanStr}`;
+      if (npc.attributes) {
+        const attrStr = Object.entries(npc.attributes)
+          .map(([k, v]) => `${k}${v}`)
+          .join('/');
+        line += `，属性：${attrStr}`;
+      }
+      lines.push(line);
+    }
+
+    return lines.join('\n');
   }
 }
 

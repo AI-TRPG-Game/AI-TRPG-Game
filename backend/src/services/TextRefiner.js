@@ -14,10 +14,10 @@ import {
   SKILL_NAME, SKILL_VALUE, ATTR_LIST,
 } from '../domain/CharacterCardSchema.js';
 import {
-  NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS, DICE,
+  NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS,
   ENTITY_NAME, ENTITY_DESC, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE, ITEM_STATUS,
-  DICE_SKILL_NAME, DICE_SKILL_POINT, DICE_NOTATION, DICE_SUCCESS_RATE,
   SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION,
+  ENDING_TEXT,
 } from '../domain/NarrativeSchema.js';
 
 // HTML 转义：转义会破坏 HTML 结构的字符（& < >），并把换行符转为 <br>
@@ -96,6 +96,8 @@ export class TextRefiner {
         return this._refineNarrative(parsed);
       case FlowType.HISTORY_SUMMARY:
         return this._refineSummary(parsed);
+      case FlowType.ENDING_GEN:
+        return this._refineEnding(parsed);
       default:
         return this._rawFallback(JSON.stringify(parsed, null, 2));
     }
@@ -149,7 +151,12 @@ export class TextRefiner {
     addField('年龄', card[AGE]);
     addField('性别', card[GENDER]);
     addField('职业', card[OCCUPATION]);
+    // 性格和肖像前插入空行，便于阅读
+    lines.push('');
+    htmlParts.push('');
     addField('性格', card[PERSONALITY]);
+    lines.push('');
+    htmlParts.push('');
     addField('人物肖像与重要经历', card[PORTRAIT], true);
 
     // ── 属性（含 HP / SAN / 信用评级） ──
@@ -227,6 +234,15 @@ export class TextRefiner {
     };
   }
 
+  // ── 结局生成 ──
+  _refineEnding(parsed) {
+    const text = parsed[ENDING_TEXT] || '';
+    return {
+      plainText: text,
+      html: `<div class="kp-block">${renderText(text)}</div>`,
+    };
+  }
+
   // ── 叙事阶段（STORY_OPENING / NARRATION_I / NARRATION_II） ──
   _refineNarrative(parsed) {
     const plainParts = [];
@@ -238,17 +254,7 @@ export class TextRefiner {
       htmlParts.push(`<div class="kp-block">${renderText(parsed[NARRATION])}</div>`);
     }
 
-    // 2. dice 提示（紧跟 narration 之后，机械化格式）
-    // 渲染为：【判定：侦查（55），1d100，成功率55%】
-    if (parsed[DICE]) {
-      const d = parsed[DICE];
-      const diceText = `【判定：${d[DICE_SKILL_NAME] || ''}（${d[DICE_SKILL_POINT] ?? ''}），${d[DICE_NOTATION] || ''}，成功率${d[DICE_SUCCESS_RATE] ?? ''}%】`;
-      plainParts.push(diceText);
-      // diceText 是模板拼接的字符串，没有 markdown 需求，escapeHtml 即可
-      htmlParts.push(`<div class="kp-block"><strong>${escapeHtml(diceText)}</strong></div>`);
-    }
-
-    // 3. 收集 meta 信息（每条前加类型标签）
+    // 2. 收集 meta 信息（每条前加类型标签）
     // 实体描述（description/baseDescription/currentState）是 LLM 自由长文本，需渲染 markdown
     // 实体 name 通常很短，escape 即可；标签（【地点】等）是模板字符串，escape 即可
     const metaLines = [];
@@ -289,15 +295,6 @@ export class TextRefiner {
         metaLines.push(text);
         metaHtml.push(`${escapeHtml('【物品】')}${escapeHtml(i[ENTITY_NAME])}：${escapeHtml(i[ITEM_STATUS] || '已获得')}，${renderText(i[ENTITY_DESC] || '')}`);
       }
-    }
-
-    if (parsed[HP] !== null && parsed[HP] !== undefined) {
-      metaLines.push(`HP：${parsed[HP]}`);
-      metaHtml.push(`HP：${parsed[HP]}`);
-    }
-    if (parsed[SAN] !== null && parsed[SAN] !== undefined) {
-      metaLines.push(`SAN：${parsed[SAN]}`);
-      metaHtml.push(`SAN：${parsed[SAN]}`);
     }
 
     if (metaHtml.length > 0) {

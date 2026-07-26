@@ -199,6 +199,17 @@ export function createGameController({ llmProvider }) {
     }
   });
 
+  // ── 重启故事（结局后用户点"是"） ──
+  router.post('/sessions/:id/restart-story', (req, res) => {
+    try {
+      const session = requireSession(req);
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      res.json(orchestrator.restartStory(req.params.id));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // ── 设定增删改 ──
 
   router.patch('/sessions/:id/world-settings', (req, res) => {

@@ -372,6 +372,20 @@
             border-radius: var(--radius-md);
         }
 
+        /* 判定结果消息（区别于纯系统提示，金色边框 + 等宽字体） */
+        .message.judge {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            background: rgba(212, 175, 55, 0.08);
+            border: 1px solid var(--divider-gold);
+            color: var(--accent);
+            align-self: center;
+            max-width: 90%;
+            text-align: center;
+            border-radius: var(--radius-md);
+            padding: 8px 14px;
+        }
+
         /* 错误 */
         .message.error {
             font-family: var(--font-mono);
@@ -426,6 +440,28 @@
         .dice-btn-cancel:hover {
             background: var(--error-bg);
             color: var(--danger);
+        }
+
+        /* ── Dice Confirm 弹窗内部样式 ── */
+        .dice-confirm-title {
+            font-family: var(--font-sans);
+            font-size: 13px;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+        .dice-confirm-item {
+            font-family: var(--font-sans);
+            font-size: 13px;
+            margin: 4px 0;
+            padding-left: 12px;
+            color: var(--text-primary);
+        }
+        .dice-confirm-hint {
+            font-family: var(--font-sans);
+            font-size: 12px;
+            margin-top: 4px;
+            color: var(--text-secondary);
+            opacity: 0.8;
         }
 
         /* ── Options Bar ── */
@@ -773,6 +809,105 @@
             min-height: 300px;
         }
 
+        /* ── HP/SAN 状态栏 ── */
+        .character-status-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-bottom: 8px;
+            padding: 6px 8px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            background: var(--bg-elevated, rgba(255,255,255,0.03));
+            font-size: 12px;
+        }
+        .char-status-item {
+            display: flex;
+            flex-direction: column;
+            padding: 3px 0;
+            border-bottom: 1px dashed var(--border-normal);
+            line-height: 1.4;
+        }
+        .char-status-item:last-child {
+            border-bottom: none;
+        }
+        .char-status-item .char-name {
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+        .char-status-item .char-hp-san {
+            color: var(--text-normal);
+            font-weight: 600;
+            font-size: 12px;
+        }
+        .char-status-item .char-attrs {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-top: 2px;
+            opacity: 0.7;
+        }
+        .char-status-item.departed .char-hp-san {
+            color: var(--danger);
+            font-style: italic;
+        }
+        .char-status-item.hidden .char-hp-san {
+            color: var(--text-muted);
+            opacity: 0.6;
+        }
+
+        /* ── 重启选项面板（结局触发后显示） ── */
+        .restart-options-panel {
+            margin: 16px 0;
+            padding: 16px;
+            border: 2px solid var(--accent);
+            border-radius: var(--radius-md);
+            background: var(--bg-elevated, rgba(255,255,255,0.05));
+            text-align: center;
+        }
+        .restart-options-panel .restart-message {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+        .restart-options-panel .restart-hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .restart-options-panel .restart-btns {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+        }
+        .restart-btn {
+            padding: 8px 24px;
+            border: 1px solid var(--accent);
+            border-radius: var(--radius-sm);
+            background: transparent;
+            color: var(--accent);
+            font-size: 14px;
+            cursor: pointer;
+            font-family: var(--font-sans);
+            transition: all var(--transition);
+        }
+        .restart-btn:hover:not(:disabled) {
+            background: var(--accent);
+            color: #fff;
+        }
+        .restart-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .restart-btn-yes {
+            background: var(--accent);
+            color: #fff;
+        }
+        .restart-btn-yes:hover:not(:disabled) {
+            opacity: 0.85;
+        }
+
         /* ── 详情面板（可拖动+可缩放） ── */
         #detail-panel {
             display: none;
@@ -1116,6 +1251,11 @@
             <div id="locations-panel"></div>
 
             <div class="sidebar-section-head">
+                <h3>角色状态</h3>
+            </div>
+            <div id="character-status" class="character-status-panel"></div>
+
+            <div class="sidebar-section-head">
                 <h3>重要 NPC</h3>
             </div>
             <div id="npcs-panel"></div>
@@ -1154,12 +1294,12 @@
                     <input id="npc-name-input" type="text" required maxlength="40">
                 </label>
                 <label>
-                    基础描述（稳定人设，不会被叙事覆盖）
-                    <textarea id="npc-description-input" required maxlength="800"></textarea>
+                    基础描述（稳定人设，75字以内，不会被叙事覆盖）
+                    <textarea id="npc-description-input" required maxlength="75"></textarea>
                 </label>
                 <label>
-                    当前状态（可选，留空则不设置）
-                    <input id="npc-state-input" type="text" maxlength="100" placeholder="如：神情紧张、正在擦拭酒杯">
+                    当前状态（可选，35字以内，留空则不设置）
+                    <input id="npc-state-input" type="text" maxlength="35" placeholder="如：神情紧张、正在擦拭酒杯">
                 </label>
                 <div id="npc-modal-actions">
                     <button id="btn-npc-cancel" type="button">取消</button>

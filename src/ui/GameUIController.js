@@ -71,10 +71,6 @@ function renderJsonBot(parsed) {
     parts.push(escapeHtml(parsed.narration));
   }
 
-  if (parsed.dice) {
-    parts.push(escapeHtml(`【判定：${parsed.dice.skill_name || ''}（${parsed.dice.skill_point ?? ''}），${parsed.dice.notation || ''}，成功率${parsed.dice.success_rate ?? ''}%】`));
-  }
-
   if (Array.isArray(parsed.locations) && parsed.locations.length > 0) {
     for (const l of parsed.locations) {
       parts.push(escapeHtml(`【地点】${l.name}：${l.description ?? ''}`));
@@ -95,13 +91,6 @@ function renderJsonBot(parsed) {
     for (const i of parsed.items) {
       parts.push(escapeHtml(`【物品】${i.name}：${i.status || '已获得'}，${i.description ?? ''}`));
     }
-  }
-
-  if (parsed.hp !== null && parsed.hp !== undefined) {
-    parts.push(escapeHtml(`HP：${parsed.hp}`));
-  }
-  if (parsed.san !== null && parsed.san !== undefined) {
-    parts.push(escapeHtml(`SAN：${parsed.san}`));
   }
 
   if (Array.isArray(parsed.options) && parsed.options.length > 0) {
@@ -144,6 +133,7 @@ export class GameUIController {
     this.playerEditArea = document.getElementById('player-edit-area');
     this.locationsPanel = document.getElementById('locations-panel');
     this.npcsPanel = document.getElementById('npcs-panel');
+    this.characterStatusPanel = document.getElementById('character-status');
     this.inventoryPanel = document.getElementById('inventory-panel');
     this.keyCharactersPanel = document.getElementById('key-characters-panel');
     this.autoGenKeyCharBtn = document.getElementById('btn-auto-gen-key-char');
@@ -518,12 +508,11 @@ export class GameUIController {
 
     // 3. debug 日志已通过 onDebug 回调实时渲染到 god's eye 面板，这里不再处理 result.debugLogs
 
-    // 4. dice 确认弹窗
-    if (result?.branch === 'DICE_AWAITING' || resp.diceNotation) {
-      const diceNotation = resp.diceNotation || result?.diceNotation;
-      if (diceNotation) {
-        this._renderDiceConfirm(diceNotation);
-      }
+    // 4. actions 确认弹窗（原 dice 确认，现在基于 actions 数组）
+    //    后端返回 result.branch === 'DICE_AWAITING' 和 result.actions
+    //    _renderDiceConfirm 不依赖具体内容，仅展示"确定/取消"按钮
+    if (result?.branch === 'DICE_AWAITING') {
+      this._renderDiceConfirm(result.actions);
     }
 
     this._updateUI();
@@ -547,28 +536,105 @@ export class GameUIController {
   }
 
   // ── Dice 确认/取消 ──
-  _renderDiceConfirm(diceNotation) {
-    // 移除旧的确认 UI（如有）
+
+  /**
+   * 按 P/S/O 集合分类 actions。
+   * P = skill_check(trigger=player) 的数量
+   * S = sancheck 的数量（trigger 恒为 others）
+   * O = others skill_check + 所有 direct（含 direct(trigger=player)）的数量
+   * @param {Array} actions
+   * @returns {{P: number, S: number, O: number, playerSkillChecks: Array, sancchecks: Array}}
+   */
+  _classifyActions(actions) {
+    const playerSkillChecks = [];
+    const sancchecks = [];
+    let O = 0;
+
+    for (const a of actions || []) {
+      const type = a.type || a.action_type;
+      const trigger = a.trigger || 'others';
+      if (type === 'skill_check' && trigger === 'player') {
+        playerSkillChecks.push(a);
+      } else if (type === 'sancheck') {
+        sancchecks.push(a);
+      } else {
+        O++;
+      }
+    }
+
+    return {
+      P: playerSkillChecks.length,
+      S: sancchecks.length,
+      O,
+      playerSkillChecks,
+      sancchecks,
+    };
+  }
+
+  /**
+   * 根据 actions 数组分类渲染 A/B 弹窗。
+   * - P ≥ 1：A 弹窗（列出 player skill_check 详情 + 取消/确定）
+   * - P = 0 且 S+O ≥ 1：B 弹窗（B1/B2/B3 子情况 + 仅确定）
+   * @param {Array} actions - pendingDiceFlow.actions（可选，缺省从 session 取）
+   */
+  _renderDiceConfirm(actions) {
     this._removeDiceConfirm();
+
+    const acts = actions || (this.session?.pendingDiceFlow?.actions) || [];
+    const { P, S, O, playerSkillChecks, sancchecks } = this._classifyActions(acts);
 
     this._diceConfirmEl = document.createElement('div');
     this._diceConfirmEl.classList.add('message', 'system');
     this._diceConfirmEl.id = 'dice-confirm-msg';
-    this._diceConfirmEl.innerHTML =
-      '<div style="margin-bottom:8px;">确定使用该技能进行投掷判定吗？</div>' +
-      '<div class="dice-confirm-btns">' +
-      '<button id="btn-dice-confirm" class="dice-btn dice-btn-confirm">确定</button>' +
-      '<button id="btn-dice-cancel" class="dice-btn dice-btn-cancel">取消并回退至上次行为</button>' +
-      '</div>';
+
+    let innerHtml = '';
+    let showCancel = false;
+
+    if (P >= 1) {
+      // === A 弹窗 ===
+      showCancel = true;
+      innerHtml += '<div class="dice-confirm-title">即将进行以下判定：</div>';
+      for (const sc of playerSkillChecks) {
+        const bonus = sc.bonus_dice > 0 ? `，奖励骰：${sc.bonus_dice}` : '';
+        const penalty = sc.penalty_dice > 0 ? `，惩罚骰：${sc.penalty_dice}` : '';
+        innerHtml += `<div class="dice-confirm-item">是否使用 ${escapeHtml(sc.skill_name)} 技能（技能点${sc.skill_point}${bonus}${penalty}）？</div>`;
+      }
+      if (S + O > 0) {
+        innerHtml += '<div class="dice-confirm-hint">（可能会触发其余判定）</div>';
+      }
+    } else {
+      // === B 弹窗 ===
+      if (S >= 1 && O === 0) {
+        // B1：纯 sancheck
+        const targets = sancchecks.map(s => s.target === 'player' ? '你' : s.target).join('、');
+        innerHtml += `<div class="dice-confirm-title">${targets} 直视了不可直视之物，需要进行 SAN 检定</div>`;
+      } else if (S === 0 && O >= 1) {
+        // B2：纯 others 非 sancheck
+        innerHtml += `<div class="dice-confirm-title">将进行 ${O} 次投掷判定</div>`;
+      } else if (S >= 1 && O >= 1) {
+        // B3：sancheck + others 混合
+        innerHtml += `<div class="dice-confirm-title">将进行 ${S + O} 次投掷判定（包括 sancheck）</div>`;
+      }
+    }
+
+    innerHtml += '<div class="dice-confirm-btns">';
+    if (showCancel) {
+      innerHtml += '<button id="btn-dice-cancel" class="dice-btn dice-btn-cancel">取消并回退</button>';
+    }
+    innerHtml += '<button id="btn-dice-confirm" class="dice-btn dice-btn-confirm">确定</button>';
+    innerHtml += '</div>';
+
+    this._diceConfirmEl.innerHTML = innerHtml;
     this.messagesEl.appendChild(this._diceConfirmEl);
     this._scrollToBottom();
 
     document.getElementById('btn-dice-confirm').addEventListener('click', () =>
       this._confirmDice()
     );
-    document.getElementById('btn-dice-cancel').addEventListener('click', () =>
-      this._cancelDice()
-    );
+    const cancelBtn = document.getElementById('btn-dice-cancel');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => this._cancelDice());
+    }
   }
 
   _removeDiceConfirm() {
@@ -591,10 +657,23 @@ export class GameUIController {
         // 保证顺序为：[系统判定结果] → [KP正在思考话术] → [LLM 回复]
         onSystemMessage: (msg) => {
           this._clearWaiting();
-          this._appendMessage(msg, 'system');
+          this._appendMessage(msg, 'judge');
           this._showWaiting();
         },
       });
+
+      // === 检查是否需要 B 二次弹窗 ===
+      if (resp.result?.branch === 'B_SANCHECK_AWAITING') {
+        this.session = resp.session;
+        this._clearWaiting();
+        this._setInputLocked(false);
+        // 渲染 B1 弹窗（只含 sancheck 部分）
+        const sancheckActions = (resp.result.actions || this.session.pendingDiceFlow?.actions || [])
+          .filter(a => (a.type || a.action_type) === 'sancheck');
+        this._renderDiceConfirm(sancheckActions);
+        return;
+      }
+
       this._renderLlmResponse(resp, { isDiceBranch: true });
       await this._persistSession();
     } catch (err) {
@@ -912,7 +991,16 @@ export class GameUIController {
     }
     this._updateUI();
     if (this.session.subState === 'DICE_PENDING' && this.session.pendingDiceFlow) {
-      this._renderDiceConfirm(this.session.pendingDiceFlow.diceNotation);
+      const dialogStage = this.session.pendingDiceFlow.dialogStage;
+      const actions = this.session.pendingDiceFlow.actions;
+      if (dialogStage === 'B_SANCHECK_CONFIRM') {
+        // A 已确认，等待 B 二次确认：渲染 B1 样式（只含 sancheck 部分）
+        const sancheckActions = (actions || []).filter(a => (a.type || a.action_type) === 'sancheck');
+        this._renderDiceConfirm(sancheckActions);
+      } else {
+        // A_CONFIRM 阶段：渲染完整 A/B 弹窗
+        this._renderDiceConfirm(actions);
+      }
     }
   }
 
@@ -954,9 +1042,14 @@ export class GameUIController {
     this.npcsPanel.innerHTML = (this.session.npcs || [])
       .map(
         (n, i) => {
-          // 主角/邀请角色标签（基于 id 区段判断）
+          // 主角/邀请角色标签（基于 keyCharacters.length 动态判断 id 区段）
+          // 后端 IdAllocator: npc_000=玩家, npc_001~00X=关键角色(X=keyCharacters.length), npc_00(X+1)+=普通NPC
+          // 硬编码 npc_001~003 会在"未邀请关键角色"时把第一个普通NPC误标为"已邀请"
+          const keyCharCount = this.session.keyCharacters?.length || 0;
+          const npcNumMatch = (n.id || '').match(/^npc_(\d{3})$/);
+          const npcNum = npcNumMatch ? parseInt(npcNumMatch[1], 10) : -1;
           const tag = n.id === 'npc_000' ? '（主角）'
-            : /^npc_00[1-3]$/.test(n.id || '') ? '（已邀请）'
+            : (npcNum >= 1 && npcNum <= keyCharCount) ? '（已邀请）'
             : '';
           return `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-id="${escapeHtml(n.id ?? '')}" title="${escapeHtml(n.id ?? '')}">${escapeHtml(n.name)}${tag ? `<small style="opacity:0.6"> ${tag}</small>` : ''}<small class="entity-id-badge">${escapeHtml(n.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`;
         }
@@ -984,9 +1077,182 @@ export class GameUIController {
           .join('')
       : '<div class="sidebar-clickable empty" style="font-size:12px;">暂无已邀请的关键角色</div>';
 
+    // 角色 HP/SAN 状态栏
+    this._renderCharacterStatus();
+
+    // 结局/重启状态检测
+    this._handleEndingStates();
+
     this._syncInputControls();
     this._renderOptionButtons();
     this._updateActionButtons();
+  }
+
+  /**
+   * 渲染角色 HP/SAN/属性 状态栏。
+   * - departed：显示"已退场"
+   * - hidden：HP/SAN/属性全部显示 ??（已隐藏）
+   * - 正常：显示 HP/SAN，key 角色额外显示 8 大属性
+   */
+  _renderCharacterStatus() {
+    if (!this.characterStatusPanel) return;
+    const npcs = this.session?.npcs || [];
+    if (npcs.length === 0) {
+      this.characterStatusPanel.innerHTML = '<div style="color:var(--text-muted);font-size:11px;">暂无角色</div>';
+      return;
+    }
+
+    const html = npcs.map(npc => {
+      const name = npc.name || npc.id;
+      let label;
+      if (npc.id === 'npc_000') {
+        label = '玩家';
+      } else if (npc.importance === 'key') {
+        label = `关键角色 · ${name}`;
+      } else if (npc.importance === 'player') {
+        label = '玩家';
+      } else {
+        label = name;
+      }
+
+      // departed 的 NPC
+      if (npc.status === 'departed') {
+        return `<div class="char-status-item departed">
+          <span class="char-name">${escapeHtml(label)}</span>
+          <span class="char-hp-san">已退场</span>
+        </div>`;
+      }
+
+      // hidden 的 NPC：HP/SAN/属性全部隐藏
+      if (npc.visibility === 'hidden') {
+        return `<div class="char-status-item hidden">
+          <span class="char-name">${escapeHtml(label)}</span>
+          <span class="char-hp-san">HP ??/?? | SAN ??/??（已隐藏）</span>
+        </div>`;
+      }
+
+      // 正常显示
+      const hpStr = npc.hp != null ? `${npc.hp}/${npc.maxHp ?? '?'}` : '?';
+      const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
+      let line = `HP ${escapeHtml(hpStr)} | SAN ${escapeHtml(sanStr)}`;
+      if (npc.attributes) {
+        const attrStr = Object.entries(npc.attributes)
+          .map(([k, v]) => `${k}${v}`)
+          .join(' ');
+        line += `<div class="char-attrs">${escapeHtml(attrStr)}</div>`;
+      }
+      return `<div class="char-status-item">
+        <span class="char-name">${escapeHtml(label)}</span>
+        <span class="char-hp-san">${line}</span>
+      </div>`;
+    }).join('');
+
+    this.characterStatusPanel.innerHTML = html;
+  }
+
+  /**
+   * 检测结局/重启状态并渲染对应 UI。
+   * - RESTART_PENDING：显示"是否重新开始故事"按钮
+   * - ENDING_PENDING：结局生成中，锁定输入
+   */
+  _handleEndingStates() {
+    const subState = this.session?.subState;
+
+    if (subState === 'RESTART_PENDING') {
+      // 仅在尚未渲染重启面板时渲染（避免重复）
+      if (!document.getElementById('restart-options')) {
+        this._renderRestartOptions();
+      }
+    } else {
+      // 非 RESTART_PENDING 时清理残留的重启面板
+      const existing = document.getElementById('restart-options');
+      if (existing) existing.remove();
+    }
+  }
+
+  /**
+   * 渲染重启选项 UI（结局触发后显示）。
+   */
+  _renderRestartOptions() {
+    const el = document.createElement('div');
+    el.id = 'restart-options';
+    el.className = 'restart-options-panel';
+    el.innerHTML = `
+      <div class="restart-message">是否重新开始故事？</div>
+      <div class="restart-hint">世界观、玩家与已邀请的关键角色设定会保留，其余设定将会删除</div>
+      <div class="restart-btns">
+        <button id="btn-restart-yes" class="restart-btn restart-btn-yes">是</button>
+        <button id="btn-restart-later" class="restart-btn restart-btn-later">暂时搁置</button>
+      </div>
+    `;
+    this.messagesEl.appendChild(el);
+    this._scrollToBottom();
+
+    document.getElementById('btn-restart-yes').addEventListener('click', () => this._restartStory());
+    document.getElementById('btn-restart-later').addEventListener('click', () => this._postponeRestart());
+  }
+
+  /**
+   * 用户点"是"重启故事。
+   */
+  async _restartStory() {
+    const btnYes = document.getElementById('btn-restart-yes');
+    const btnLater = document.getElementById('btn-restart-later');
+    if (btnYes) btnYes.disabled = true;
+    if (btnLater) btnLater.disabled = true;
+
+    this._setInputLocked(true);
+    this._showWaiting();
+
+    try {
+      const prevDisplayLen = this.session?.displayLog?.length || 0;
+      const resp = await apiClient.restartStory(this.session);
+      this.session = resp.session;
+      // 移除重启面板
+      const panel = document.getElementById('restart-options');
+      if (panel) panel.remove();
+      this._clearWaiting();
+      this._setInputLocked(false);
+
+      // 渲染重启后新增的 displayLog 条目（player 重启请求 + KP 新开幕）
+      const newEntries = (this.session.displayLog || []).slice(prevDisplayLen);
+      if (newEntries.length > 0) {
+        this._appendMessage('故事已重新开启，继续冒险吧。', 'system');
+        for (const entry of newEntries) {
+          const type = entry.role === 'player' ? 'user' : entry.role === 'system' ? 'system' : 'bot';
+          const el = this._appendMessage('', type);
+          if (type === 'bot') {
+            const content = entry.content || '';
+            el.innerHTML = content.trim().startsWith('<div') ? content : renderBotContent(content);
+          } else {
+            el.textContent = entry.content;
+          }
+        }
+      } else {
+        this._appendMessage('故事已重新开启，继续冒险吧。', 'system');
+      }
+
+      this._updateUI();
+      await this._persistSession();
+    } catch (err) {
+      this._appendMessage(`错误: ${err.message}`, 'error');
+      this._clearWaiting();
+      // 重新启用按钮让用户可以重试
+      if (btnYes) btnYes.disabled = false;
+      if (btnLater) btnLater.disabled = false;
+    }
+  }
+
+  /**
+   * 用户点"暂时搁置"。
+   * 隐藏重启面板，允许用户继续浏览对话（但输入仍锁定，因为 RESTART_PENDING 状态未解除）。
+   */
+  _postponeRestart() {
+    const panel = document.getElementById('restart-options');
+    if (panel) {
+      panel.remove();
+    }
+    this._appendMessage('已搁置重启。可随时刷新页面再次选择。', 'system');
   }
 
   /** 从角色卡文本中提取姓名 */
@@ -1193,9 +1459,9 @@ export class GameUIController {
         // NPC 新结构：name + baseDescription + currentState（兼容旧 description 字段读取）
         const npc = !isNew ? (this.session.npcs || [])[index] : { name: '', baseDescription: '', currentState: '' };
         const baseDesc = npc?.baseDescription ?? npc?.description ?? '';
-        return `<label>名称 <input id="edit-name" type="text" value="${escapeHtml(npc?.name || '')}"></label>
-          <label>基础描述 <textarea id="edit-desc" rows="4">${escapeHtml(baseDesc)}</textarea></label>
-          <label>当前状态 <input id="edit-state" type="text" value="${escapeHtml(npc?.currentState || '')}" placeholder="如：神情紧张、正在擦拭酒杯"></label>
+        return `<label>名称 <input id="edit-name" type="text" maxlength="40" value="${escapeHtml(npc?.name || '')}"></label>
+          <label>基础描述（75字以内） <textarea id="edit-desc" rows="4" maxlength="75">${escapeHtml(baseDesc)}</textarea></label>
+          <label>当前状态（35字以内） <input id="edit-state" type="text" maxlength="35" value="${escapeHtml(npc?.currentState || '')}" placeholder="如：神情紧张、正在擦拭酒杯"></label>
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <button id="detail-panel-save" type="button">保存</button>
             ${isNew ? '' : '<button id="detail-panel-delete" class="sbb-delete" type="button" style="margin-top:0;">删除</button>'}

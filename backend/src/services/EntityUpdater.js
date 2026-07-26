@@ -1,6 +1,6 @@
 import { ChatRole, ChatEntryType } from '../domain/enums.js';
 import {
-  NARRATION, LOCATIONS, NPCS, ITEMS, HP, SAN, OPTIONS,
+  NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS,
   ENTITY_NAME, ENTITY_DESC, ENTITY_ID, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE, ITEM_STATUS,
 } from '../domain/NarrativeSchema.js';
 import { idAllocator } from './IdAllocator.js';
@@ -68,20 +68,54 @@ function currentTurn(session) {
  */
 function mergeEntity(existing, entry, entityType) {
   if (entityType === 'npc') {
+    // name：仅当 existing 为空时填入（不覆盖）
     if (!existing.name && entry.name) existing.name = entry.name;
+    // baseDescription：仅当 existing 为空时填入（稳定人设不覆盖）
     if (!existing.baseDescription && entry.baseDescription) {
       existing.baseDescription = entry.baseDescription;
     }
+    // currentState：只要 entry 非空就覆盖（动态状态）
     if (entry.currentState !== undefined && entry.currentState !== '') {
       existing.currentState = entry.currentState;
     }
-    // importance：LLM 可以重新评估重要性（升级或降级）
-    if (entry.importance) existing.importance = entry.importance;
+
+    // === HP/SAN 相关字段 ===
+    // hp/san/maxHp/maxSan：仅首次创建时填入（existing 无值时），后续由 DamageResolver 管理
+    if (entry.hp != null && existing.hp == null) existing.hp = entry.hp;
+    if (entry.maxHp != null && existing.maxHp == null) existing.maxHp = entry.maxHp;
+    if (entry.san != null && existing.san == null) existing.san = entry.san;
+    if (entry.maxSan != null && existing.maxSan == null) existing.maxSan = entry.maxSan;
+
+    // visibility：可更新（非空即覆盖）
+    // LLM 可根据剧情切换（神秘人现身 hidden→visible 等）
+    if (entry.visibility) {
+      existing.visibility = entry.visibility;
+    }
+
+    // attributes：仅首次填入后锁定（与 baseDescription 同样的保护逻辑）
+    // 仅 key 角色输出，supporting 留 null；existing 已有值时不覆盖
+    if (entry.attributes && !existing.attributes) {
+      existing.attributes = entry.attributes;
+    }
+
+    // status：只由系统设置（DamageResolver），LLM 输出的 status 字段被忽略
+    // 不在此处理 status
+
+    // importance：可升级（supporting→key），但 player/key 锁定不可降级
+    if (entry.importance) {
+      const cur = existing.importance;
+      const newVal = entry.importance;
+      const rank = { supporting: 1, key: 2, player: 3 };
+      // existing 是 player 或 key 时不允许降级
+      if (cur && rank[cur] >= rank['key'] && rank[cur] > rank[newVal]) {
+        // player/key 锁定，不允许降级
+      } else if (!cur || (rank[newVal] && rank[newVal] > (rank[cur] || 0))) {
+        existing.importance = newVal;
+      }
+    }
   } else {
     if (!existing.name && entry.name) existing.name = entry.name;
     // 防护：新值非空才覆盖，避免 LLM 引用已有实体但未填描述时用空串覆盖原描述
-    // 触发场景：LLM 输出已存在的 location/item 但 description 字段为 null/空，
-    //          upsertEntity 调用处已把 null 兜底为 ''，若不加防护会清空已有描述
     if (entry.description) existing.description = entry.description;
     if (entityType === 'item' && entry.status) {
       existing.status = entry.status;
@@ -93,12 +127,21 @@ function mergeEntity(existing, entry, entityType) {
 function createNewEntity(entry, list, session, entityType) {
   const turn = currentTurn(session);
   if (entityType === 'npc') {
+    const keyCharCount = session.keyCharacters?.length || 0;
     return {
-      id: idAllocator.nextNewNpcId(list),
+      id: idAllocator.nextNewNpcId(list, keyCharCount),
       name: entry.name || '',
       baseDescription: entry.baseDescription ?? entry.description ?? '',
       currentState: entry.currentState ?? '',
-      importance: entry.importance || 'supporting',   // 兜底默认值（不应触发，schema 已强制 enum）
+      importance: entry.importance || 'supporting',
+      // HP/SAN 相关字段
+      hp: entry.hp ?? null,
+      maxHp: entry.maxHp ?? null,
+      san: entry.san ?? null,
+      maxSan: entry.maxSan ?? null,
+      visibility: entry.visibility || 'visible',
+      status: 'active',  // 默认 active，departed 由系统设置
+      attributes: entry.attributes ?? null,
       firstSeenAt: turn,
       lastUpdatedAt: turn,
     };
@@ -201,25 +244,6 @@ function ensureIdsForExistingEntities(session) {
   }
 }
 
-// ── HP/SAN 更新（与原逻辑一致，未改动） ──
-
-function updatePlayerStats(player, hp, san) {
-  let updated = player;
-  if (hp !== null && hp !== undefined) {
-    updated = updated.replace(/HP[：:]\s*\d+/, `HP：${hp}`);
-    if (!/HP[：:]/.test(updated)) {
-      updated += `\nHP：${hp}`;
-    }
-  }
-  if (san !== null && san !== undefined) {
-    updated = updated.replace(/SAN[：:]\s*\d+/, `SAN：${san}`);
-    if (!/SAN[：:]/.test(updated)) {
-      updated += `\nSAN：${san}`;
-    }
-  }
-  return updated;
-}
-
 export class EntityUpdater {
   /**
    * 应用叙述阶段输出。
@@ -280,20 +304,14 @@ export class EntityUpdater {
       }
     }
 
-    // npcs（JSON 数组）—— 过滤 background 角色（连带解决"LLM 记录过多不重要对象"问题）
-    // 三层防护 L3：后端兜底过滤。即便 LLM 违反 prompt 把 background 角色输出到列表，也在此剔除。
-    // 例外：若 LLM 给了 id（引用已有实体），则保留（可能是状态更新，不应因 importance 被误删）
+    // npcs（JSON 数组）
+    // background 已从 schema enum 移除，路人直接在 narration 中描写，不需要过滤
     const npcList = parsed?.[NPCS];
     if (Array.isArray(npcList)) {
       for (const npc of npcList) {
         if (!npc[ENTITY_NAME]) continue;
         // 防护：只有名字没 currentState（LLM 引用已有 NPC 但未填写任何动态状态）→ 跳过
-        // 注意：NPC 的"描述"判断字段是 currentState（动态状态），不是 baseDescription（稳定人设）
         if (!npc[ENTITY_CURRENT_STATE]) continue;
-        // 过滤 background 新实体（id 为 null 的 background 角色不进 session）
-        if (npc.importance === 'background' && !npc[ENTITY_ID]) {
-          continue;
-        }
         upsertEntity(
           patch.npcs,
           {
@@ -302,6 +320,15 @@ export class EntityUpdater {
             baseDescription: npc[ENTITY_BASE_DESC] || '',
             currentState: npc[ENTITY_CURRENT_STATE] || '',
             importance: npc.importance || 'supporting',
+            // HP/SAN 相关字段（首次出场时由 LLM 输出，后续轮次为 null）
+            hp: npc.hp ?? null,
+            maxHp: npc.maxHp ?? null,
+            san: npc.san ?? null,
+            maxSan: npc.maxSan ?? null,
+            visibility: npc.visibility || null,
+            // status 由系统设置，不从 LLM 输出中取
+            // attributes 仅 key 角色输出
+            attributes: npc.attributes ?? null,
           },
           session,
           'npc'
@@ -334,16 +361,7 @@ export class EntityUpdater {
     session.npcs = patch.npcs;
     session.inventory = patch.inventory;
 
-    // HP / SAN
-    const hp = parsed?.[HP];
-    const san = parsed?.[SAN];
-    if (hp !== null && hp !== undefined && san !== null && san !== undefined) {
-      session.player = updatePlayerStats(session.player, hp, san);
-    } else if (hp !== null && hp !== undefined) {
-      session.player = updatePlayerStats(session.player, hp, null);
-    } else if (san !== null && san !== undefined) {
-      session.player = updatePlayerStats(session.player, null, san);
-    }
+    // HP/SAN 由 DamageResolver 根据 actions 字段计算并直接更新 npc 条目，本函数不处理顶层 hp/san
 
     // options（JSON 数组 → 文本）—— 保留 optionBuffer 供前端渲染选项按钮
     if (Array.isArray(opts) && opts.length > 0) {

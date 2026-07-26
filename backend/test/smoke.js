@@ -51,7 +51,7 @@ console.assert(
 const streamingSession = new GameSession({
   id: 'streaming',
   subState: SubState.LLM_STREAMING,
-  pendingDiceFlow: { diceNotation: '1d100' },
+  pendingDiceFlow: { actions: [{ type: 'skill_check', skill_name: '侦查', skill_point: 50, bonus_dice: 0, penalty_dice: 0, on_success: [], on_fail: [] }], pendingRaw: '{}' },
 });
 console.assert(
   streamingSession.toJSON().subState === SubState.LLM_STREAMING,
@@ -74,7 +74,7 @@ console.assert(
 const diceSession = new GameSession({
   id: 'dice',
   subState: SubState.DICE_PENDING,
-  pendingDiceFlow: { diceNotation: '1d100' },
+  pendingDiceFlow: { actions: [{ type: 'skill_check', skill_name: '侦查', skill_point: 50, bonus_dice: 0, penalty_dice: 0, on_success: [], on_fail: [] }], pendingRaw: '{}' },
 });
 console.assert(
   diceSession.toClientJSON().subState === SubState.DICE_PENDING,

@@ -14,15 +14,17 @@ import { outputProcessor } from '../services/OutputProcessor.js';
 import { entityUpdater } from '../services/EntityUpdater.js';
 import { idAllocator } from '../services/IdAllocator.js';
 import { saveExtractor } from '../services/SaveExtractor.js';
-import { diceService } from '../services/DiceService.js';
+import { damageResolver } from '../services/DamageResolver.js';
+import { endingService } from '../services/EndingService.js';
 import { HistorySummarizer } from '../services/HistorySummarizer.js';
 import { FLOW_REQUIRED_FIELD } from '../services/PromptTemplateRegistry.js';
 import {
-  DICE,
-  DICE_SKILL_NAME,
-  DICE_SKILL_POINT,
-  DICE_NOTATION,
-  DICE_SUCCESS_RATE,
+  ACTIONS,
+  ACTION_TYPE,
+  TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
+  DIALOG_STAGE, DIALOG_A_CONFIRM, DIALOG_B_SANCHECK_CONFIRM, DIALOG_EXECUTING,
+  BRANCH_B_SANCHECK_AWAITING,
+  SANCHECK,
 } from '../domain/NarrativeSchema.js';
 import { textRefiner } from '../services/TextRefiner.js';
 
@@ -138,12 +140,52 @@ export class GameOrchestrator {
     if (!raw) throw new Error('没有可存档的玩家设定输出');
 
     session.player = saveExtractor.extractCharacterFromRaw(raw);
+
+    // 初始化 npc_000 的姓名/HP/SAN（从角色卡解析）
+    const stats = saveExtractor.extractCharacterStats(raw);
+    if (stats) {
+      this._ensurePlayerNpc(session, stats.name, stats.hp, stats.san);
+    }
+
     this._pushDisplay(session, 'system', GameConfig.GUIDANCE.CHARACTER_SAVED);
     this.repository.save(session);
     return {
       session: session.toClientJSON(),
       message: GameConfig.GUIDANCE.CHARACTER_SAVED,
     };
+  }
+
+  /**
+   * 确保 npc_000 存在并初始化 姓名/HP/SAN。
+   * 已存在的 npc_000 若 name 仍为占位"玩家"，则用真实姓名覆盖。
+   */
+  _ensurePlayerNpc(session, name, hp, san) {
+    let playerNpc = session.npcs.find(n => n.id === 'npc_000');
+    if (!playerNpc) {
+      playerNpc = {
+        id: 'npc_000',
+        name,
+        baseDescription: '',
+        currentState: '',
+        importance: 'player',
+        hp, maxHp: hp,
+        san, maxSan: san,
+        visibility: 'visible',
+        status: 'active',
+        attributes: null,
+        firstSeenAt: session.chatRecord?.length ?? 0,
+        lastUpdatedAt: session.chatRecord?.length ?? 0,
+      };
+      session.npcs.unshift(playerNpc);
+    } else {
+      // 已存在则更新（可能从旧数据迁移）
+      // name 仍为占位"玩家"时用真实姓名覆盖；已有真实姓名则不覆盖（避免回退）
+      if (playerNpc.name === '玩家' && name) playerNpc.name = name;
+      if (playerNpc.hp == null) { playerNpc.hp = hp; playerNpc.maxHp = hp; }
+      if (playerNpc.san == null) { playerNpc.san = san; playerNpc.maxSan = san; }
+      if (!playerNpc.visibility) playerNpc.visibility = 'visible';
+      if (!playerNpc.status) playerNpc.status = 'active';
+    }
   }
 
   updatePlayer(sessionId, player) {
@@ -407,6 +449,18 @@ export class GameOrchestrator {
     try {
       const result = await this._runLlmFlow(session, FlowType.STORY_OPENING, '', onDebug);
 
+      // 缓存故事开幕（用于结局重置时重新发送）
+      if (result?.parsed) {
+        session.storyOpeningCache = {
+          raw: result.raw || '',
+          parsed: result.parsed,
+          timestamp: new Date().toISOString(),
+        };
+
+        // 缓存玩家/关键角色初始状态（用于结局重置时恢复）
+        session.characterInitialStats = this._captureInitialStats(session);
+      }
+
       session.subState = SubState.AWAITING_INPUT;
       this.repository.save(session);
 
@@ -420,6 +474,29 @@ export class GameOrchestrator {
       this.repository.save(session);
       throw err;
     }
+  }
+
+  /**
+   * 捕获玩家/关键角色的初始状态快照（用于结局重置时恢复）。
+   */
+  _captureInitialStats(session) {
+    const keyCharCount = session.keyCharacters?.length || 0;
+    const stats = [];
+    for (let i = 0; i <= keyCharCount; i++) {
+      const npcId = i === 0 ? 'npc_000' : `npc_${String(i).padStart(3, '0')}`;
+      const npc = session.npcs.find(n => n.id === npcId);
+      if (npc) {
+        stats.push({
+          npcId,
+          hp: npc.hp,
+          maxHp: npc.maxHp,
+          san: npc.san,
+          maxSan: npc.maxSan,
+          currentState: npc.currentState || '',
+        });
+      }
+    }
+    return stats;
   }
 
   async handleMessage(sessionId, userText, { onDebug } = {}) {
@@ -480,13 +557,13 @@ export class GameOrchestrator {
       const flowType = phaseManager.getFlowType(session);
       const result = await this._runLlmFlow(session, flowType, userText, onDebug);
 
-      // 检查是否进入 dice 确认等待
+      // 检查是否进入掷骰确认等待
       if (result.branch === 'DICE_AWAITING') {
         diceAwaiting = true;
         return {
           session: session.toClientJSON(),
           result,
-          diceNotation: result.diceNotation,
+          actions: result.actions,
         };
       }
 
@@ -522,23 +599,24 @@ export class GameOrchestrator {
     result.debugLogs = debugLogs;
     result.refinedHtml = refinedHtml;
 
-    // 持久化 reasoning_content 到 session（DeepSeek 官方要求：思考模式 + 工具调用场景下，后续轮次必须回传）
-    // 直接存到 session.pendingReasoningContent，由下一次 assemble 时读取并注入到 messages
-    if (reasoningContent) {
-      if (!session.recentReasoningContents) session.recentReasoningContents = [];
-      session.recentReasoningContents.push({
-        flowType,
-        reasoningContent,
-        timestamp: new Date().toISOString(),
-      });
-      // 限制保留数量，避免无限增长
-      if (session.recentReasoningContents.length > 10) {
-        session.recentReasoningContents = session.recentReasoningContents.slice(-10);
+    // 持久化 reasoning_content 到最近推入 chatRecord 的 KP 条目（DeepSeek 官方要求：工具调用轮次后续必须回传）
+    // 设计：reasoningContent 直接附加到 chatRecord 条目上，1:1 精确匹配，避免独立队列 FIFO 错位
+    // - NARRATIVE 分支：applyNarrative 已推入 KP 条目（含 parsed），附加到该条目
+    // - ACTIONS 分支：applyNarrative 未调用（提前 return），narration 尚未进入 chatRecord
+    //   → reasoningContent 通过 _handleDiceBranch 存入 pendingDiceFlow.pendingReasoningContent，
+    //     在用户确认后由 _executeDice 附加到 pending narration 条目（工具调用轮次必须回传）
+    // - SETUP 分支（WORLD/CHARACTER）：applySetupHistory 推入的是 raw 文本，无 parsed，走兜底路径不注入
+    if (reasoningContent && result.branch === 'NARRATIVE') {
+      const lastKpEntry = [...session.chatRecord].reverse().find(
+        e => e.role === ChatRole.KP && e.parsed && e.flowType
+      );
+      if (lastKpEntry && !lastKpEntry.reasoningContent) {
+        lastKpEntry.reasoningContent = reasoningContent;
       }
     }
 
-    // 非 dice 分支：执行【】保底存储（dice 分支延迟到用户确认后）
-    if (result.branch !== 'DICE') {
+    // 非 ACTIONS 分支：执行【】保底存储（ACTIONS 分支延迟到用户确认后）
+    if (result.branch !== 'ACTIONS') {
       const bracketFallback = this._extractBracketOutsideNarration(raw);
       if (bracketFallback) {
         session.chatRecord.push({
@@ -550,8 +628,8 @@ export class GameOrchestrator {
       }
     }
 
-    while (result.branch === 'DICE') {
-      result = await this._handleDiceBranch(session, result, debugLogs, onDebug);
+    while (result.branch === 'ACTIONS') {
+      result = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug);
     }
 
     return result;
@@ -822,22 +900,32 @@ export class GameOrchestrator {
 
   // ── Dice 分支处理 ──
 
-  async _handleDiceBranch(session, diceResult, debugLogs, onDebug) {
+  async _handleDiceBranch(session, actionsResult, reasoningContent, debugLogs, onDebug) {
     session.subState = SubState.DICE_PENDING;
+    // 计算 hasS：actions 数组中是否含 sancheck
+    const actions = actionsResult.actions || [];
+    const hasS = actions.some(a => {
+      const type = a[ACTION_TYPE] || a.type;
+      return type === SANCHECK;
+    });
     session.pendingDiceFlow = {
-      diceNotation: diceResult.diceNotation,
-      pendingRaw: diceResult.raw,
+      actions: actionsResult.actions,
+      pendingRaw: actionsResult.raw,
+      // 保存该轮次的 reasoning_content（DeepSeek 官方要求：工具调用轮次后续必须回传，否则 API 400）
+      pendingReasoningContent: reasoningContent || null,
       rollbackChatLen: session.chatRecord.length,
       rollbackDisplayLen: (session.displayLog || []).length,
+      // 新增：弹窗阶段状态机
+      dialogStage: DIALOG_A_CONFIRM,
+      hasS,
     };
     this.repository.save(session);
 
-    // 保留 refinedHtml，让前端 _renderLlmResponse 能渲染 narration + dice 提示
-    // 否则前端只看到 { branch: 'DICE_AWAITING', diceNotation }，不会渲染 bot 消息
+    // 保留 refinedHtml，让前端 _renderLlmResponse 能渲染 narration + actions 提示
     return {
       branch: 'DICE_AWAITING',
-      diceNotation: diceResult.diceNotation,
-      refinedHtml: diceResult.refinedHtml,
+      actions: actionsResult.actions,
+      refinedHtml: actionsResult.refinedHtml,
     };
   }
 
@@ -847,28 +935,45 @@ export class GameOrchestrator {
       throw new Error('当前无待确认的掷骰');
     }
 
-    const { diceNotation, pendingRaw } = session.pendingDiceFlow;
+    const { actions, pendingRaw, dialogStage, hasS } = session.pendingDiceFlow;
+
+    // === A→B 状态机 ===
+    // A_CONFIRM 阶段：检查是否需要 B 二次弹窗
+    if (dialogStage === DIALOG_A_CONFIRM) {
+      if (hasS) {
+        // 有 sancheck：切换到 B_SANCHECK_CONFIRM，返回 B_SANCHECK_AWAITING 让前端弹 B1
+        session.pendingDiceFlow.dialogStage = DIALOG_B_SANCHECK_CONFIRM;
+        this.repository.save(session);
+        return {
+          session: session.toClientJSON(),
+          result: { branch: BRANCH_B_SANCHECK_AWAITING },
+        };
+      }
+      // 无 sancheck：直接进入 EXECUTING
+      session.pendingDiceFlow.dialogStage = DIALOG_EXECUTING;
+    } else if (dialogStage === DIALOG_B_SANCHECK_CONFIRM) {
+      // B 确认后：进入 EXECUTING
+      session.pendingDiceFlow.dialogStage = DIALOG_EXECUTING;
+    } else if (dialogStage === DIALOG_EXECUTING) {
+      throw new Error('掷骰已在执行中，不应再次确认');
+    }
+
     session.subState = SubState.LLM_STREAMING;
     this.repository.save(session);
 
-    let diceAwaiting = false;
     try {
       const execResult = await this._executeDice(
         session,
-        diceNotation,
+        actions,
         pendingRaw,
         onDebug,
         onSystemMessage
       );
-      if (execResult && execResult.branch === 'DICE_AWAITING') {
-        diceAwaiting = true;
-      }
-      // dice 系统消息已通过 onSystemMessage 实时推送给前端，不再在 done 事件里重复返回
-      // （避免 _renderLlmResponse 二次渲染同一消息）
+      // 系统消息已通过 onSystemMessage 实时推送给前端，不再在 done 事件里重复返回
       return {
         session: session.toClientJSON(),
         result: execResult,
-        diceNotation: execResult.diceNotation,
+        actions: execResult.actions,
       };
     } catch (err) {
       session.pendingDiceFlow = null;
@@ -905,20 +1010,27 @@ export class GameOrchestrator {
     };
   }
 
-  async _executeDice(session, diceNotation, pendingRaw, onDebug, onSystemMessage) {
-    // 用户已确认 —— 将本次触发 dice 的 narration 和【】写入 chatRecord
+  async _executeDice(session, actions, pendingRaw, onDebug, onSystemMessage) {
+    // 用户已确认 —— 将本次触发 actions 的 narration 和【】写入 chatRecord
     // 方案 B：pendingParsed 带 parsed + flowType，让历史 assistant 消息呈 tool_calls 结构
-    //         pendingBracket 是从 raw 提取的【】片段，非完整 parsed，保持纯文本
     const pendingParsed = jsonOutputParser.parse(pendingRaw);
+    // 从 pendingDiceFlow 取回该轮次的 reasoning_content
+    // DeepSeek 官方要求：思考模式下工具调用轮次的 reasoning_content 在后续所有请求中必须回传，否则 API 400
+    const pendingReasoningContent = session.pendingDiceFlow?.pendingReasoningContent || null;
     if (pendingParsed?.narration) {
-      session.chatRecord.push({
+      const pendingEntry = {
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
         content: pendingParsed.narration,
         parsed: pendingParsed,
         flowType: FlowType.NARRATION_I,
         timestamp: new Date().toISOString(),
-      });
+      };
+      // 附加 reasoning_content，使 chatRecordToMessages 能注入到 assistant 消息中回传给 API
+      if (pendingReasoningContent) {
+        pendingEntry.reasoningContent = pendingReasoningContent;
+      }
+      session.chatRecord.push(pendingEntry);
     }
     const pendingBracket = this._extractBracketOutsideNarration(pendingRaw);
     if (pendingBracket) {
@@ -930,34 +1042,27 @@ export class GameOrchestrator {
       });
     }
 
-    const requests = diceService.parseNotation(diceNotation);
-    const values = diceService.rollAll(requests);
+    // 调用 DamageResolver 处理 actions 数组（掷骰 + HP/SAN 计算 + 系统消息生成）
+    const damageResult = damageResolver.resolve(session, { actions });
 
-    // 从上一轮 LLM 输出中解析 dice 字段，由系统按 COC 7e 规则组装判定结果
-    // 替代原"【系统投掷结果】9"格式，LLM 无需再自行生成判定等级
-    const diceInfo = (pendingParsed && pendingParsed[DICE]) || {};
-    const systemMsg = diceService.formatSystemMessage({
-      skillName: diceInfo[DICE_SKILL_NAME] || '',
-      skillPoint: diceInfo[DICE_SKILL_POINT] ?? 0,
-      notation: diceInfo[DICE_NOTATION] || diceNotation,
-      successRate: diceInfo[DICE_SUCCESS_RATE] ?? 0,
-      values,
-    });
-
-    this._pushDisplay(session, 'system', systemMsg);
-
-    // 系统判定结果生成后立即通过 SSE 推送给前端，让用户在 LLM 回复前就能看到
-    // 不要等整个 _executeDice 完成（含 LLM 调用）才一起返回，否则用户等待时间长
-    if (onSystemMessage) {
-      try { onSystemMessage(systemMsg); } catch { /* 回调异常不应影响主流程 */ }
+    // SSE 推送系统判定消息（在 LLM 调用前，让用户在 LLM 回复前就能看到判定结果）
+    for (const msg of damageResult.systemMessages) {
+      this._pushDisplay(session, 'system', msg);
+      if (onSystemMessage) {
+        try { onSystemMessage(msg); } catch { /* 回调异常不影响主流程 */ }
+      }
+      session.chatRecord.push({
+        role: ChatRole.SYSTEM,
+        type: ChatEntryType.SYSTEM,
+        content: msg,
+        timestamp: new Date().toISOString(),
+      });
     }
 
-    session.chatRecord.push({
-      role: ChatRole.SYSTEM,
-      type: ChatEntryType.SYSTEM,
-      content: systemMsg,
-      timestamp: new Date().toISOString(),
-    });
+    // 检查是否触发结局（玩家 HP/SAN 清零 → 跳过 NARRATION_II，进入结局流程）
+    if (damageResult.playerDied) {
+      return await this._triggerEnding(session, damageResult, onDebug, onSystemMessage);
+    }
 
     if (session.chatRecord.length > 0) {
       await this.historySummarizer.checkAndRun(session);
@@ -989,27 +1094,27 @@ export class GameOrchestrator {
     }
     this._pushDisplay(session, 'kp', refinedHtml);
 
-    // 持久化 reasoning_content（思考模式 + 工具调用场景下后续轮次必须回传）
-    if (reasoningContent) {
-      if (!session.recentReasoningContents) session.recentReasoningContents = [];
-      session.recentReasoningContents.push({
-        flowType: FlowType.NARRATION_II,
-        reasoningContent,
-        timestamp: new Date().toISOString(),
-      });
-      while (session.recentReasoningContents.length > 10) {
-        session.recentReasoningContents.shift();
-      }
-    }
-
     const parsed = jsonOutputParser.parse(raw);
     let result = outputProcessor.process(FlowType.NARRATION_II, session, parsed, raw);
     result.debugLogs = debugLogs;
     result.refinedHtml = refinedHtml;
+
+    // 持久化 reasoning_content 到最近推入 chatRecord 的 KP 条目（1:1 精确匹配）
+    if (reasoningContent && result.branch === 'NARRATIVE') {
+      const lastKpEntry = [...session.chatRecord].reverse().find(
+        e => e.role === ChatRole.KP && e.parsed && e.flowType
+      );
+      if (lastKpEntry && !lastKpEntry.reasoningContent) {
+        lastKpEntry.reasoningContent = reasoningContent;
+      }
+    }
+
     this.repository.save(session);
 
-    while (result.branch === 'DICE') {
-      const diceCheck = await this._handleDiceBranch(session, result, debugLogs, onDebug);
+    // 递归检测：从 'DICE' 改为 'ACTIONS'（与 OutputProcessor 返回值一致）
+    while (result.branch === 'ACTIONS') {
+      // NARRATION_II 返回 ACTIONS 时，同样需要保存该轮次的 reasoning_content
+      const diceCheck = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug);
       if (diceCheck.branch === 'DICE_AWAITING') {
         return diceCheck;
       }
@@ -1021,5 +1126,88 @@ export class GameOrchestrator {
     this.repository.save(session);
 
     return result;
+  }
+
+  /**
+   * 触发结局流程。
+   * 1. 推送结局触发系统消息
+   * 2. 设置 ENDING_PENDING 状态
+   * 3. 调用 ENDING_GEN flow 生成结局文本
+   * 4. 设置 RESTART_PENDING 状态
+   */
+  async _triggerEnding(session, damageResult, onDebug, onSystemMessage) {
+    const debugLogs = [];
+
+    // 1. 推送结局触发消息
+    const player = session.npcs.find(n => n.id === 'npc_000');
+    const triggerMsg = endingService.buildEndingTriggerMessage(player);
+    this._pushDisplay(session, 'system', triggerMsg);
+    if (onSystemMessage) {
+      try { onSystemMessage(triggerMsg); } catch {}
+    }
+    session.chatRecord.push({
+      role: ChatRole.SYSTEM,
+      type: ChatEntryType.SYSTEM,
+      content: triggerMsg,
+      timestamp: new Date().toISOString(),
+    });
+
+    // 2. 设置 ENDING_PENDING 状态
+    session.subState = SubState.ENDING_PENDING;
+    this.repository.save(session);
+
+    // 3. 调用 ENDING_GEN flow
+    const assembled = inputAssembler.assemble(FlowType.ENDING_GEN, session, {});
+    const { raw, refinedHtml, reasoningContent } = await this._callLLMWithRetry(
+      session, assembled, FlowType.ENDING_GEN, debugLogs, onDebug
+    );
+
+    // 处理结局文本（解析 LLM 输出）
+    const endingParsed = jsonOutputParser.parse(raw);
+    const endingText = endingParsed?.ending_text || '故事到此结束。';
+    const endingType = endingParsed?.ending_type || 'death';
+
+    // 使用 TextRefiner 渲染结局文本（统一 escape/markdown/<br> 处理）
+    this._pushDisplay(session, 'kp', refinedHtml);
+    const endingEntry = {
+      role: ChatRole.KP,
+      type: ChatEntryType.NARRATION,
+      content: endingText,
+      parsed: endingParsed,
+      flowType: FlowType.ENDING_GEN,
+      timestamp: new Date().toISOString(),
+    };
+    // 持久化 reasoning_content 到该 KP 条目（1:1 精确匹配，后续轮次回传）
+    if (reasoningContent) {
+      endingEntry.reasoningContent = reasoningContent;
+    }
+    session.chatRecord.push(endingEntry);
+
+    // 4. 设置 RESTART_PENDING 状态
+    session.subState = SubState.RESTART_PENDING;
+    session.pendingDiceFlow = null;
+    this.repository.save(session);
+
+    return { debugLogs, endingTriggered: true, endingText, endingType, refinedHtml };
+  }
+
+  /**
+   * 重启故事（用户点"是"后调用）。
+   * 委托 EndingService 执行重启流程，并推送 displayLog 让前端能看到新开幕。
+   */
+  restartStory(sessionId) {
+    const session = this.getSession(sessionId);
+    endingService.restartStory(session);
+
+    // 推送 displayLog（EndingService 只写 chatRecord，displayLog 由 orchestrator 统一管理）
+    this._pushDisplay(session, 'player', '请重新开启一轮故事，世界观与主要人设不变');
+    const cache = session.storyOpeningCache;
+    if (cache?.parsed) {
+      const refined = textRefiner.refine(FlowType.STORY_OPENING, cache.parsed);
+      this._pushDisplay(session, 'kp', refined.html);
+    }
+
+    this.repository.save(session);
+    return { session: session.toClientJSON() };
   }
 }

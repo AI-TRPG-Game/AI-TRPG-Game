@@ -27,6 +27,23 @@ export class SaveExtractor {
     return this._serializeCharacterCard(parsed[CARD_KEY], true);
   }
 
+  /**
+   * 从角色卡 raw 输出中提取姓名/HP/SAN，用于初始化 npc_000。
+   * @param {string} raw - LLM 输出的角色卡 JSON 文本
+   * @returns {{name: string, hp: number, san: number} | null}
+   */
+  extractCharacterStats(raw) {
+    const parsed = jsonOutputParser.parse(raw);
+    if (!parsed || !jsonOutputParser.hasCharacterCard(parsed)) return null;
+    const card = parsed[CARD_KEY];
+    const hp = typeof card[HP] === 'number' ? card[HP] : null;
+    const san = typeof card[SAN] === 'number' ? card[SAN] : null;
+    if (hp == null || san == null) return null;
+    const name = typeof card[NAME] === 'string' ? card[NAME].trim() : '';
+    if (!name) throw new Error('角色卡缺少姓名字段');
+    return { name, hp, san };
+  }
+
   getLatestKpOutput(session, bucket) {
     const history =
       bucket === 'world'

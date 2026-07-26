@@ -4,7 +4,7 @@
 **状态**: 设计已确认，待实现
 **关联专题**: 专题2-核心机制缺陷与修复（缺陷二：HP/SAN 虚设 + 缺陷一：结局触发）
 
----
+***
 
 ## 1. 背景与问题
 
@@ -16,12 +16,12 @@
 - 无 `maxHp`/`maxSan` 概念，LLM 可把 HP 从 5 改到 150（超过最大值）
 - HP/SAN 变化完全由 LLM 决定，不与骰子检定关联，不遵循 CoC 7e 伤害公式
 - NPC 完全没有 hp/san 字段
-- 骰子结果与 HP/SAN 完全解耦（骰子只生成"判定等级文本"，HP/SAN 变化由 LLM 在 NARRATION_II 凭感觉编）
+- 骰子结果与 HP/SAN 完全解耦（骰子只生成"判定等级文本"，HP/SAN 变化由 LLM 在 NARRATION\_II 凭感觉编）
 
 **缺陷一：结局触发机制缺失**
 
-- `Phase` 只有 4 个阶段（WORLD_SETTING/CHARACTER_SETTING/KEY_CHARACTER_SETTING/STORY_PLAY），没有 ENDING
-- `SubState` 只有 4 个子状态（AWAITING_INPUT/LLM_STREAMING/DICE_PENDING/SUMMARIZING），没有 GAME_OVER
+- `Phase` 只有 4 个阶段（WORLD\_SETTING/CHARACTER\_SETTING/KEY\_CHARACTER\_SETTING/STORY\_PLAY），没有 ENDING
+- `SubState` 只有 4 个子状态（AWAITING\_INPUT/LLM\_STREAMING/DICE\_PENDING/SUMMARIZING），没有 GAME\_OVER
 - 没有任何代码检测 `hp<=0` / `san<=0`
 
 ### 1.2 设计目标
@@ -46,13 +46,14 @@
 ### 1.4 骰子公式格式
 
 `hp_san_changes[].delta` 和现有 DiceService 的 notation 字段统一使用 **NdM+K** 格式字符串：
+
 - `1d3`、`1d4`、`1d6`、`1d8`、`1d10`、`1d100`（标准骰）
 - `2d6+1`、`1d4+2`（带加成）
 - `1d3`（SAN check 成功伤害）、`1d6`（SAN check 失败伤害）
 
 现有 DiceService 只支持 1d100，需扩展为支持通用 `NdM+K` 公式解析与投掷。
 
----
+***
 
 ## 2. 数据结构变更
 
@@ -68,14 +69,16 @@ npcs[] 包含所有角色：
 ```
 
 **格式区分**：
+
 - 玩家和关键角色保留 `session.player`（字符串）和 `session.keyCharacters[]`（字符串数组）作为角色卡文本源（显示和 prompt 用）
-- npc_000~00X 条目的 baseDescription 不存文本，标记 importance 即可，渲染时从 player/keyCharacters 取
+- npc\_000\~00X 条目的 baseDescription 不存文本，标记 importance 即可，渲染时从 player/keyCharacters 取
 - 普通 NPC 用 baseDescription + currentState
 
 **编号方案与决策时机**：
+
 - 故事开幕时（`openStory` 被调用，准备处理 LLM 故事开幕输出时），根据 `keyCharacters.length` 确定普通 NPC 起始编号
-- `idAllocator.nextNewNpcId` 改为：起始编号 = `keyCharacters.length + 1`（000 是玩家，001~00X 是关键角色）
-- 结局重置时：删除 `id > npc_00X` 的所有 NPC（X = keyCharacters.length），保留 npc_000~00X
+- `idAllocator.nextNewNpcId` 改为：起始编号 = `keyCharacters.length + 1`（000 是玩家，001\~00X 是关键角色）
+- 结局重置时：删除 `id > npc_00X` 的所有 NPC（X = keyCharacters.length），保留 npc\_000\~00X
 
 ### 2.2 NPC 条目扩展
 
@@ -91,28 +94,34 @@ npc = {
   maxSan,       // 最大 SAN（number）
   visibility,   // 'visible'（玩家可见）| 'hidden'（前端显示"已隐藏"）
   status,       // 'active' | 'departed'（清零后标记退场，不从列表移除）
+  attributes,   // 8大属性对象（仅 key 角色输出，supporting 不输出）
 }
 ```
 
-- **首次出场**：LLM 在 npcItemSchema 中输出完整 hp/san/maxHp/maxSan/visibility
-- **后续轮次**：LLM 不再输出这些字段（靠 hp_san_changes 触发变化）
-- **visibility 锁定**：首次创建时写入，已存在则忽略新值
+- **首次出场**：LLM 在 npcItemSchema 中输出完整 hp/san/maxHp/maxSan/visibility；key 角色额外输出 attributes
+- **后续轮次**：LLM 不再输出这些字段（靠 actions 触发变化）
+- **visibility 可更新**：LLM 可根据剧情切换（如神秘人现身 hidden→visible，角色潜行隐匿 visible→hidden）
+- **attributes 锁定**：key 角色首次创建时填入，后续不可覆盖（与 baseDescription 同样的保护逻辑）
+- **hidden 角色的属性处理**：创建时 LLM 输出完整属性+hp/san，系统存储真实值；前端和 prompt 注入时隐藏数值（显示 "??"）；visibility 变为 visible 后开始显示真实值（数值本身不变）
 - **status='departed'**：NPC hp/san≤0 时由系统标记，LLM 在叙事中体现退场
 
 ### 2.3 NPC 更新权限矩阵
 
-| importance | baseDescription | currentState | hp/san | visibility | importance |
-|---|---|---|---|---|---|
-| player | 不可改（从 session.player 取） | 可更新 | 系统计算 | 锁定 | 锁定 |
-| key | 不可改（从 keyCharacters 取） | 可更新 | 系统计算 | 锁定 | 锁定 |
-| supporting | 首次设定后不可改 | 可更新 | 系统计算 | 锁定 | 可升级（→key） |
-| background | 不可改 | 可更新 | 不追踪 | 无 | 可升级（→supporting/key） |
+| importance | baseDescription         | currentState | hp/san | visibility | importance | attributes       |
+| ---------- | ----------------------- | ------------ | ------ | ---------- | ---------- | ---------------- |
+| player     | 不可改（从 session.player 取） | 可更新          | 系统计算   | 锁定（visible） | 锁定（player） | 锁定（从角色卡取） |
+| key        | 不可改（从 keyCharacters 取）  | 可更新          | 系统计算   | 可更新        | 锁定（key）   | 首次填入后锁定 |
+| supporting | 首次设定后不可改                | 可更新          | 系统计算   | 可更新        | 可升级（→key） | 不输出（null） |
 
-**prompt 约束**：重要性是暂时的，可因后续剧情升级（background→supporting→key），但 player/key 一旦设定不可降级或变更。
+**设计说明**：
+- `background` 不作为 importance 枚举值——路人/背景角色不进入 npcs 数组，直接在 narration 中描写
+- 玩家/已邀请关键角色的 importance 和 visibility 由系统锁定，LLM 即使输出也会被 mergeEntity 忽略
+- 其他 NPC 的 importance 和 visibility 不需要在 prompt 特别约束，LLM 可根据剧情自由更新
+- supporting 角色不输出 attributes，仅 key 角色输出（key 可能参与检定，需要精确属性值；supporting 不检定，伤害通过 delta 公式体现）
 
 ### 2.4 actions 字段 schema（统一替代三字段）
 
-将原 `dice` 字段（及之前设计的 attr_skill_dice/sancheck_dice/hp_san_changes 三字段）统一合并为一个 `actions` 数组。每个 action 自包含"检定+后果"，消除多检定场景下的歧义。
+将原 `dice` 字段（及之前设计的 attr\_skill\_dice/sancheck\_dice/hp\_san\_changes 三字段）统一合并为一个 `actions` 数组。每个 action 自包含"检定+后果"，消除多检定场景下的歧义。
 
 ```javascript
 // 变化项（change）统一结构：on_success/on_fail/changes 数组的元素
@@ -152,21 +161,23 @@ actions: [
 ```
 
 **相比三字段设计的精简点**：
-- 三字段（attr_skill_dice + sancheck_dice + hp_san_changes）→ 一个 `actions` 字段
-- `trigger` 字段不再需要（on_success/on_fail 已表达触发条件）
+
+- 三字段（attr\_skill\_dice + sancheck\_dice + hp\_san\_changes）→ 一个 `actions` 字段
+- `trigger` 字段不再需要（on\_success/on\_fail 已表达触发条件）
 - `san_value` 不再需要（系统查 target 当前 SAN）
 - `notation` 不再需要（固定 1d100）
-- `success_rate` 不再需要（= skill_point）
+- `success_rate` 不再需要（= skill\_point）
 
-**消除歧义的核心**：每个检定的后果自包含在 action 内，不跨字段关联。同一轮可包含多个检定（多个 skill_check、多个 sancheck、或混合），每个检定的后果独立无歧义。
+**消除歧义的核心**：每个检定的后果自包含在 action 内，不跨字段关联。同一轮可包含多个检定（多个 skill\_check、多个 sancheck、或混合），每个检定的后果独立无歧义。
 
 ### 2.5 顶层 hp/san 字段语义变更
 
 `buildNarrationStrictSchema` 中的 `hp`/`san` 顶层字段（`nullableInteger(-99, 99)`）**语义变更**：
+
 - **旧语义**：LLM 输出 HP/SAN 绝对值，系统用正则替换字符串
 - **新语义**：LLM 固定填 `null`（系统全权计算伤害，LLM 不再输出数值）
 - schema 中字段保留（方案 B+ 统一 schema 兼容性），但 prompt 明确指示"hp/san 固定填 null，由系统计算"
-- 系统通过 prompt 注入当前所有角色（npc_000~00X + 普通 NPC）的 hp/san，让 LLM 知道当前数值（见 3.4）
+- 系统通过 prompt 注入当前所有角色（npc\_000\~00X + 普通 NPC）的 hp/san，让 LLM 知道当前数值（见 3.4）
 
 ### 2.6 新增 session 缓存字段
 
@@ -189,31 +200,36 @@ session.characterInitialStats = null | [
 **缓存时机**：故事开幕完成时（`openStory` 完成后）
 **恢复时机**：用户点"是"重启时
 
----
+***
 
 ## 3. HP/SAN 变化数据流
 
-### 3.1 NARRATION_I 输出的场景（基于 actions 字段）
+### 3.1 NARRATION\_I 输出的场景（基于 actions 字段）
 
 **场景 A：纯技能检定**（如攀爬、聆听）
+
 ```javascript
 actions: [
   { type: 'skill_check', skill_name: '攀爬', skill_point: 60,
     on_success: [], on_fail: [] }
 ]
 ```
-- on_success/on_fail 都为空 = 无 HP/SAN 变化，只输出判定结果
+
+- on\_success/on\_fail 都为空 = 无 HP/SAN 变化，只输出判定结果
 
 **场景 B：SAN 检定**（目击恐怖事物）
+
 ```javascript
 actions: [
   { type: 'sancheck', target: 'player' }
 ]
 ```
+
 - 系统查 player 当前 SAN 作为阈值，投 1d100
 - 成功投 1d3 SAN 伤害，失败投 1d6 SAN 伤害（系统自动计算，LLM 不输出伤害）
 
 **场景 C：直接伤害/治疗**（物理攻击、休息恢复、区域影响）
+
 ```javascript
 actions: [
   { type: 'direct', changes: [
@@ -221,9 +237,11 @@ actions: [
   ]}
 ]
 ```
+
 - 无检定，系统投 delta，按 effect 扣减或增加
 
 **场景 D：检定+伤害**（玩家攻击 NPC / NPC 攻击玩家 / 治愈术等）
+
 ```javascript
 // D1: 玩家攻击 NPC（成功才造成伤害）
 actions: [
@@ -248,6 +266,7 @@ actions: [
 ```
 
 **场景 E：多检定组合**（原三字段设计无法表达，actions 无歧义覆盖）
+
 ```javascript
 // E1: 玩家攻击NPC + 同时闪避另一NPC攻击
 actions: [
@@ -320,12 +339,14 @@ actions: [
 新增 `DamageResolver.getStatusWord(attr, damageAmount)`:
 
 **HP 伤害**（基于单次伤害量）：
+
 - 1-3 → "轻微受伤"
 - 4-9 → "受重伤"
 - ≥10 → "致命重创"
 - HP ≤ 0 → "濒死"（玩家触发结局，NPC 标记 departed）
 
 **SAN 伤害**（基于 CoC 7e 单次损失）：
+
 - 1-4 → "头晕目眩"
 - ≥5 → "暂时疯狂"（CoC 7e：单次损失 ≥5 立即发作）
 - SAN ≤ 0 → "永久疯狂"（玩家触发结局，NPC 标记 departed）
@@ -334,45 +355,47 @@ actions: [
 
 状态词一次性提示，不持久化。`status='departed'` 持久化到 npc 条目。
 
-### 3.4 prompt 注入当前 HP/SAN
+### 3.4 prompt 注入当前角色状态
 
-`InputAssembler` 在组装 NARRATION_I/II 的 prompt 时，注入所有角色的当前 HP/SAN：
+`InputAssembler` 在组装 NARRATION\_I/II 的 prompt 时，注入所有角色的当前 HP/SAN（及 key 角色的属性）：
 
 ```
 【当前角色状态】
 玩家（npc_000）：HP 8/11，SAN 65/70
-关键角色1（npc_001 · 阿史德·跋禄迦）：HP 10/10，SAN 55/60
+关键角色1（npc_001 · 阿史德·跋禄迦）：HP 10/10，SAN 55/60，属性：力量50/敏捷60/体质55/体型60/外貌50/智力60/意志55/教育65
 普通NPC（npc_002 · 葡萄盏酒肆老板）：HP 6/8，SAN 50/50
-隐藏NPC（npc_003 · 神秘人）：HP ??/??，SAN ??/??（已隐藏）
+隐藏NPC（npc_003 · 神秘人）：HP ??/??，SAN ??/??，属性 ??（已隐藏）
 ```
 
 - visibility='hidden' 的 NPC，数值显示 "??"，LLM 知道存在但不知道具体值
 - departed 的 NPC 标注"已退场"，prompt 约束 LLM 不可让其行动
 
-### 3.5 NARRATION_II 阶段
+### 3.5 NARRATION\_II 阶段
 
-系统判定+状态词通过 system 消息推送给 LLM 后，NARRATION_II 的 prompt 包含：
+系统判定+状态词通过 system 消息推送给 LLM 后，NARRATION\_II 的 prompt 包含：
+
 - 系统判定结果（"【受到1d4=3点HP伤害 → 轻微受伤】"）
 - 当前角色状态（HP/SAN 数值）
 
-LLM 据此输出 NARRATION_II：
+LLM 据此输出 NARRATION\_II：
+
 ```
 narration: "触手抽中你的肩膀，一阵剧痛传来...(描写伤害和状态词的叙事体现)"
 hp: null, san: null  // LLM 固定填 null，系统已计算完毕
 actions: null  // 本轮无新判定
 ```
 
-NARRATION_II 中若 actions 非空，走递归 dice 分支（现有机制）。
+NARRATION\_II 中若 actions 非空，走递归 dice 分支（现有机制）。
 
----
+***
 
 ## 4. 结局触发与重新开始机制
 
 ### 4.1 结局触发条件
 
-`DamageResolver` 在每次伤害计算后检测：**仅玩家（npc_000）** 的 hp≤0 或 san≤0 触发结局流程。NPC 清零只标记 `status='departed'` + 生成状态词。
+`DamageResolver` 在每次伤害计算后检测：**仅玩家（npc\_000）** 的 hp≤0 或 san≤0 触发结局流程。NPC 清零只标记 `status='departed'` + 生成状态词。
 
-触发时机：在 `confirmDice` 流程中，DamageResolver 计算伤害后、调用 NARRATION_II **之前**检测。若触发结局，**跳过 NARRATION_II**，进入结局流程。
+触发时机：在 `confirmDice` 流程中，DamageResolver 计算伤害后、调用 NARRATION\_II **之前**检测。若触发结局，**跳过 NARRATION\_II**，进入结局流程。
 
 ### 4.2 结局流程数据流
 
@@ -393,7 +416,7 @@ NARRATION_II 中若 actions 非空，走递归 dice 分支（现有机制）。
    - 禁止玩家操作对话框（直到点"是"并完成重启）
 ```
 
-### 4.3 新增 FlowType.ENDING_GEN
+### 4.3 新增 FlowType.ENDING\_GEN
 
 ```javascript
 // enums.js 新增
@@ -461,18 +484,20 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 - 重启完成（故事开幕重新发送后）：恢复对话框操作权限
 
 前端状态管理：
+
 - `subState === 'ENDING_PENDING'` 时：LLM 正在生成结局，禁用对话框
 - `subState === 'RESTART_PENDING'` 时：禁用对话框 + 显示重启按钮
 - `subState === 'AWAITING_INPUT'`（重启后）时：恢复对话框 + 隐藏重启按钮
 
----
+***
 
 ## 5. 新增组件与模块清单
 
 ### 5.1 新增模块
 
 **`DamageResolver.js`**（核心新模块）
-- 职责：处理 attr_skill_dice / sancheck_dice / hp_san_changes，计算伤害，更新 HP/SAN，生成状态词和系统消息
+
+- 职责：处理 attr\_skill\_dice / sancheck\_dice / hp\_san\_changes，计算伤害，更新 HP/SAN，生成状态词和系统消息
 - 依赖：DiceService（掷骰）、GameSession（npcs 数组）、NarrativeSchema（字段常量）
 - 接口：
   ```javascript
@@ -487,7 +512,8 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
   ```
 
 **`EndingService.js`**（结局与重启）
-- 职责：检测结局触发、调用 ENDING_GEN、执行重启流程
+
+- 职责：检测结局触发、调用 ENDING\_GEN、执行重启流程
 - 依赖：GameOrchestrator（调 LLM）、GameSession（状态管理）、storyOpeningCache/characterInitialStats
 - 接口：
   ```javascript
@@ -499,33 +525,37 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 
 ### 5.2 现有模块修改
 
-| 模块 | 修改内容 |
-|---|---|
-| `GameSession.js` | 新增 `storyOpeningCache`、`characterInitialStats`；npcs 数组元素新增 hp/san/maxHp/maxSan/visibility/status 字段；删除 playerStats（改用 npc_000 的 hp/san） |
-| `DiceService.js` | 扩展为支持通用 `NdM+K` 公式解析与投掷（现有仅支持 1d100）；新增 `rollFormula(formula)` 方法；新增惩罚/奖励骰计算（1d100 拆为十位骰+个位骰，惩罚骰多投十位骰取较大，奖励骰取较小，最多 2 个） |
-| `NarrativeSchema.js` | `DICE` 改名 `ACTIONS`；新增 `ACTIONS`、`SKILL_CHECK`、`SANCHECK`、`DIRECT`、`ON_SUCCESS`、`ON_FAIL`、`CHANGES`、`BONUS_DICE`、`PENALTY_DICE`、`TARGET`、`ATTR_FIELD`、`DELTA`、`EFFECT`、`ENDING_TYPE`、`ENDING_TEXT` 常量；`HP`/`SAN` 顶层字段语义变更（LLM 固定填 null） |
-| `StrictSchemaRegistry.js` | `diceSchema` 替换为 `actionsSchema`（含 skill_check/sancheck/direct 三种类型的 oneOf）；新增 `changeItemSchema`（target/attr/delta/effect）；新增 `endingGenStrictSchema`、`buildEndingGenStrictSchema`；`npcItemSchema` 新增 hp/san/maxHp/maxSan/visibility/status；`FLOW_FUNCTION_NAMES` 新增 output_ending（第5个函数） |
-| `EntityUpdater.js` | 删除 `updatePlayerStats`（正则替换）；`mergeEntity` 增加 hp/san/visibility/status 处理逻辑（visibility 首次锁定、importance 可升级）；玩家/关键角色合并到 npcs 数组的逻辑 |
-| `OutputProcessor.js` | Dice 分支检测改为检测 `actions` 字段非空；调用 DamageResolver |
-| `GameOrchestrator.js` | `_executeDice` 重构：注入 DamageResolver + EndingService；`saveCharacter` 时初始化 npc_000 的 hp/san/maxHp/maxSan；`openStory` 完成后缓存 storyOpeningCache + characterInitialStats；新增 `restartStory` 方法 |
-| `PromptTemplateRegistry.js` | NARRATION_I/II prompt 注入当前 HP/SAN 状态；importance 可变说明；新增 ENDING_GEN system instruction |
-| `InputAssembler.js` | `_buildNarrationI/II Messages` 注入角色状态块；ENDING_GEN 的 message 组装 |
-| `GameController.js` | 新增 `/restart-story` 路由 |
-| `GameUIController.js` | 新增 HP/SAN 状态栏渲染；结局/重启按钮 UI；RESTART_PENDING 状态管理 |
-| `enums.js` | 新增 `FlowType.ENDING_GEN`、`SubState.ENDING_PENDING`、`SubState.RESTART_PENDING` |
+| 模块                          | 修改内容                                                                                                                                                                                                                                                                                         |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GameSession.js`            | 新增 `storyOpeningCache`、`characterInitialStats`；npcs 数组元素新增 hp/san/maxHp/maxSan/visibility/status/attributes 字段；删除 playerStats（改用 npc\_000 的 hp/san）                                                                                                                                          |
+| `DiceService.js`            | 扩展为支持通用 `NdM+K` 公式解析与投掷（现有仅支持 1d100）；新增 `rollFormula(formula)` 方法；新增惩罚/奖励骰计算（1d100 拆为十位骰+个位骰，惩罚骰多投十位骰取较大，奖励骰取较小，最多 2 个）                                                                                                                                                                      |
+| `NarrativeSchema.js`        | `DICE` 改名 `ACTIONS`；新增 `ACTIONS`、`SKILL_CHECK`、`SANCHECK`、`DIRECT`、`ON_SUCCESS`、`ON_FAIL`、`CHANGES`、`BONUS_DICE`、`PENALTY_DICE`、`TARGET`、`ATTR_FIELD`、`DELTA`、`EFFECT`、`ENDING_TYPE`、`ENDING_TEXT` 常量；`HP`/`SAN` 顶层字段语义变更（LLM 固定填 null）                                                      |
+| `StrictSchemaRegistry.js`   | `diceSchema` 替换为 `actionsSchema`（含 skill\_check/sancheck/direct 三种类型的 oneOf）；新增 `changeItemSchema`（target/attr/delta/effect）；新增 `endingGenStrictSchema`、`buildEndingGenStrictSchema`；`npcItemSchema` 新增 hp/san/maxHp/maxSan/visibility/status/attributes，importance enum 移除 background（仅 key/supporting）；`FLOW_FUNCTION_NAMES` 新增 output\_ending（第5个函数） |
+| `EntityUpdater.js`          | 删除 `updatePlayerStats`（正则替换）；`mergeEntity` 增加 hp/san/visibility/status/attributes 处理逻辑（visibility 可更新、importance 可升级、attributes 首次填入后锁定）；玩家/关键角色合并到 npcs 数组的逻辑                                                                                                                                  |
+| `OutputProcessor.js`        | Dice 分支检测改为检测 `actions` 字段非空；调用 DamageResolver                                                                                                                                                                                                                                               |
+| `GameOrchestrator.js`       | `_executeDice` 重构：注入 DamageResolver + EndingService；`saveCharacter` 时初始化 npc\_000 的 hp/san/maxHp/maxSan；`openStory` 完成后缓存 storyOpeningCache + characterInitialStats；新增 `restartStory` 方法                                                                                                     |
+| `PromptTemplateRegistry.js` | NARRATION\_I/II prompt 注入当前 HP/SAN 状态；importance 可变说明；新增 ENDING\_GEN system instruction                                                                                                                                                                                                      |
+| `InputAssembler.js`         | `_buildNarrationI/II Messages` 注入角色状态块；ENDING\_GEN 的 message 组装                                                                                                                                                                                                                              |
+| `GameController.js`         | 新增 `/restart-story` 路由                                                                                                                                                                                                                                                                       |
+| `GameUIController.js`       | 新增 HP/SAN 状态栏渲染；结局/重启按钮 UI；RESTART\_PENDING 状态管理                                                                                                                                                                                                                                             |
+| `enums.js`                  | 新增 `FlowType.ENDING_GEN`、`SubState.ENDING_PENDING`、`SubState.RESTART_PENDING`                                                                                                                                                                                                                |
 
 ### 5.3 数据迁移
 
 现有 session 数据需要迁移：
-- `session.player` 中的 HP/SAN 解析到 npc_000 条目（如果 npc_000 不存在则创建）
-- `session.keyCharacters[]` 中的角色映射到 npc_001~00X（如果不存在则创建）
-- 现有 `session.npcs[]` 中的 NPC 保持不变，新增 hp/san/maxHp/maxSan 字段默认值（可设为 null 表示未追踪）
 
-迁移可以在 `GameSession` 构造函数中做向后兼容处理（检测旧格式并自动转换）。
+- `session.player` 中的 HP/SAN 解析到 npc\_000 条目（如果 npc\_000 不存在则创建）
+- `session.keyCharacters[]` 中的角色映射到 npc\_001\~00X（如果不存在则创建）
+- 现有 `session.npcs[]` 中的 NPC 保持不变，新增 hp/san/maxHp/maxSan/visibility/status/attributes 字段默认值（可设为 null 表示未追踪）
+- 旧 `npc.importance='background'` 的数据需清理（background 已从 enum 移除，降级为 supporting）
+- 新增 `storyOpeningCache`、`characterInitialStats` 缓存字段默认 null
+
+迁移在 `GameSession` 构造函数中做向后兼容处理（`_migrateLegacyData` 方法，检测旧格式并自动转换，幂等执行）。
 
 ### 5.4 测试覆盖
 
 **DamageResolver 单元测试**：
+
 - 五种场景（A/B/C/D/E）的正确处理
 - 惩罚/奖励骰计算
 - 状态词映射边界值
@@ -534,31 +564,35 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 - 多检定组合（场景E）的顺序处理与独立性
 
 **EndingService 单元测试**：
+
 - 结局触发条件
 - 重启流程（状态恢复、NPC 删除、故事开幕重发）
 - characterInitialStats 缓存与恢复
 
 **集成测试**：
-- 完整伤害流程（NARRATION_I → confirmDice → DamageResolver → NARRATION_II）
-- 结局流程（伤害清零 → ENDING_GEN → 重启 → 故事开幕重发）
+
+- 完整伤害流程（NARRATION\_I → confirmDice → DamageResolver → NARRATION\_II）
+- 结局流程（伤害清零 → ENDING\_GEN → 重启 → 故事开幕重发）
 - 数据迁移（旧 session 格式 → 新格式）
 
----
+***
 
 ## 6. 设计决策记录
 
 ### 6.1 关键决策
 
 1. **系统全权计算伤害**：LLM 只输出 actions 字段，系统计算数值并更新 HP/SAN，LLM 通过 prompt 知道当前数值但固定填 null
-2. **统一 actions 字段**：三字段（attr_skill_dice/sancheck_dice/hp_san_changes）合并为一个 actions 数组，每个 action 自包含"检定+后果"，消除多检定歧义
-3. **统一到 npcs 数组**：玩家=npc_000，关键角色=npc_001~00X，普通 NPC=npc_00(X+1)+，HP/SAN 逻辑统一一套
+2. **统一 actions 字段**：三字段（attr\_skill\_dice/sancheck\_dice/hp\_san\_changes）合并为一个 actions 数组，每个 action 自包含"检定+后果"，消除多检定歧义
+3. **统一到 npcs 数组**：玩家=npc\_000，关键角色=npc\_001\~00X，普通 NPC=npc\_00(X+1)+，HP/SAN 逻辑统一一套
 4. **惩罚/奖励骰替代 NPC 技能值**：NPC 不检定，强弱通过惩罚/奖励骰体现（范围 0-2，机制为多投十位骰取较大/较小）
-5. **on_success/on_fail 替代 trigger**：变化项的触发条件由 action 内的 on_success/on_fail 表达，不再需要 trigger 字段
-6. **visibility 首次锁定**：避免 LLM 随意切换可见性
-7. **importance 可升级**：background→supporting→key，但 player/key 锁定
-8. **结局仅限玩家**：NPC 清零只标记 departed，不触发结局
-9. **重新开始保留对话记忆**：chatRecord 不删除，LLM 有第一轮故事的记忆
-10. **currentState 恢复初始值**：重启时玩家/关键角色状态回到故事开幕时的状态
+5. **on\_success/on\_fail 替代 trigger**：变化项的触发条件由 action 内的 on\_success/on\_fail 表达，不再需要 trigger 字段
+6. **visibility 可更新**：LLM 可根据剧情切换可见性（如神秘人现身、角色潜行隐匿）；仅玩家/已邀请关键角色由系统锁定
+7. **importance 可升级**：supporting→key 可升级，但 player/key 一旦设定不可降级或变更；不设 background 枚举值，路人直接在 narration 中描写
+8. **key 角色输出 attributes**：为更真实，key 角色首次创建时输出 8 大属性（锁定不可改）；supporting 不输出属性（不参与检定，伤害通过 delta 公式体现）
+9. **hidden 角色属性策略**：创建时 LLM 输出完整属性+hp/san，系统存储真实值；前端和 prompt 注入时隐藏数值（显示 "??"）；visibility 变 visible 后显示真实值（数值本身不变，避免 LLM 在揭示时刻重新计算属性导致不一致）
+10. **结局仅限玩家**：NPC 清零只标记 departed，不触发结局
+11. **重新开始保留对话记忆**：chatRecord 不删除，LLM 有第一轮故事的记忆
+12. **currentState 恢复初始值**：重启时玩家/关键角色状态回到故事开幕时的状态
 
 ### 6.2 放弃的特性
 
@@ -567,9 +601,20 @@ chatRecord 保持完整（不删除任何对话记录）。LLM 看到的历史�
 - **临时疯狂状态机**：不持久化疯狂状态，状态词一次性提示
 - **NPC 检定**：NPC 不检定，只玩家/关键角色检定
 - **完整 CoC 7e 战斗规则**：不集成武器伤害公式、护甲、体格等
+- **supporting 角色属性**：supporting 不输出 8 大属性，仅 key 角色输出（简化 token 消耗，supporting 不参与检定）
 
 ### 6.3 待实现时确认的细节
 
 - HP/SAN 状态栏的前端 UI 布局（侧边栏 vs 顶部栏）
 - 结局文本的 RPG 风格具体格式（"达成 XXX 结局"的 XXX 由 LLM 生成）
 - 惩罚/奖励骰的具体 UI 展示（是否在系统消息中显示投骰过程）
+
+### 6.4 后续阶段待实现特性
+
+- **技能/属性成长机制**（CoC 7e 成长规则）：
+  - 每次技能检定成功后标记"成长标记"
+  - 模组结束/章节结束时进行成长检定：投 1d100 > 当前技能值 → +1d10
+  - 设计意图：技能越低越容易成长，模拟学习曲线
+  - 融入前置条件：需先结构化存储玩家技能（当前存在 session.player 字符串中）
+  - 简化方案：在 npc_000 新增 `skillChecks` 标记字段，DamageResolver 在 skill_check 成功时标记，章节结束时系统自动成长检定
+

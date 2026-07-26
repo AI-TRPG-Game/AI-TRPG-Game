@@ -179,6 +179,21 @@ export class ApiClient {
   }
 
   /**
+   * 重启故事（结局后用户点"是"）。
+   * @param {Object} session - 当前 session
+   * @returns {Promise<{session: Object}>}
+   */
+  async restartStory(session) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/restart-story`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  /**
    * 消费 SSE 流：解析 event:debug / event:system-message / event:done / event:error 事件。
    * - debug：调用 onDebug(log) 实时推送到 god's eye 面板
    * - system-message：调用 onSystemMessage(msg) 实时推送到对话界面（dice 判定结果）
@@ -256,6 +271,21 @@ export class ApiClient {
 
   async cancelDice(session) {
     const res = await fetch(`${API_BASE}/sessions/${session.id}/dice-cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  /**
+   * 重启故事（结局后用户点"是"）。
+   * @param {Object} session - 当前 session
+   * @returns {Promise<{session: Object}>}
+   */
+  async restartStory(session) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/restart-story`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session }),

@@ -10,6 +10,8 @@ export const SubState = {
   LLM_STREAMING: 'LLM_STREAMING',
   DICE_PENDING: 'DICE_PENDING',
   SUMMARIZING: 'SUMMARIZING',
+  ENDING_PENDING: 'ENDING_PENDING',       // 结局生成中
+  RESTART_PENDING: 'RESTART_PENDING',     // 等待用户选择是否重启
 };
 
 export const FlowType = {
@@ -20,6 +22,7 @@ export const FlowType = {
   NARRATION_I: 'NARRATION_I',
   NARRATION_II: 'NARRATION_II',
   HISTORY_SUMMARY: 'HISTORY_SUMMARY',
+  ENDING_GEN: 'ENDING_GEN',               // 结局生成
 };
 
 export const ChatRole = {

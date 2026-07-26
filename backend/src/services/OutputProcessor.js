@@ -1,7 +1,7 @@
 import { FlowType } from '../domain/enums.js';
 import { jsonOutputParser } from './JsonOutputParser.js';
 import { entityUpdater } from './EntityUpdater.js';
-import { DICE, DICE_NOTATION, DICE_SKILL_NAME, SUMMARY } from '../domain/NarrativeSchema.js';
+import { SUMMARY, ACTIONS } from '../domain/NarrativeSchema.js';
 
 export class OutputProcessor {
   /**
@@ -20,12 +20,12 @@ export class OutputProcessor {
       return { branch: 'SUMMARY', summary: parsed[SUMMARY] };
     }
 
-    // Dice 分支
-    if (parsed && jsonOutputParser.hasDice(parsed)) {
+    // ACTIONS 分支（替代原 Dice 分支）
+    // 检测 actions 字段非空数组 → 需要掷骰确认
+    if (parsed && jsonOutputParser.hasActions(parsed)) {
       return {
-        branch: 'DICE',
-        diceNotation: parsed[DICE][DICE_NOTATION],
-        diceSkillName: parsed[DICE][DICE_SKILL_NAME],
+        branch: 'ACTIONS',
+        actions: parsed[ACTIONS],
         raw: rawText,
       };
     }

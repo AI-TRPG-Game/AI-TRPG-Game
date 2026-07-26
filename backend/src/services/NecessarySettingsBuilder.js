@@ -66,13 +66,6 @@ export class NecessarySettingsBuilder {
           lines.push(parts.join(' '));
         }
       }
-
-      lines.push('');
-      lines.push('⚠️ 提醒：');
-      lines.push('1. 引用已存在实体时必须填入对应 id，仅更新需要变化的字段；不要修改 name');
-      lines.push('2. 仅当实体确实首次出场时，才将 id 设为 null（系统会自动分配新 id）');
-      lines.push('3. 不要用昵称、敬称、缩写、全称变体重新命名已存在的实体');
-      lines.push('4. 主角(npc_000)和已邀请角色(npc_001~npc_003)已固定存在，不要作为新 NPC 输出');
     }
 
     return lines.join('\n');
