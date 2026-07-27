@@ -2,7 +2,7 @@ import { diceService } from './DiceService.js';
 import {
   ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
-  TARGET, ATTR_FIELD, DELTA, EFFECT,
+  TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
   ON_CRITICAL_SUCCESS, ON_CRITICAL_FAILURE,
 } from '../domain/NarrativeSchema.js';
@@ -219,12 +219,15 @@ export class DamageResolver {
   }
 
   /**
-   * 应用单个变化项（投骰 + 更新 HP/SAN + 生成状态词消息）。
+   * 应用单个变化项（投骰/固定值 + 更新 HP/SAN + 生成状态词消息）。
+   * 用于 skill_check 的 on_success/on_fail/on_critical_success/on_critical_failure。
    */
   _applyChange(session, change, departedNpcs) {
     const targetId = change[TARGET];
     const attr = change[ATTR_FIELD];
-    const delta = change[DELTA];
+    const diceCount = change[DICE_COUNT] ?? 0;
+    const diceSides = change[DICE_SIDES] ?? 0;
+    const diceBonus = change[DICE_BONUS] ?? 0;
     const effect = change[EFFECT];
 
     const target = this._findNpc(session, targetId);
@@ -232,7 +235,12 @@ export class DamageResolver {
       return `【变化失败：未找到目标 ${targetId}】`;
     }
 
-    const rollResult = diceService.rollFormula(delta);
+    // 跨字段约束（schema 无法表达，代码层校验）
+    if (diceCount === 0 && diceBonus === 0) {
+      return `【变化失败：diceCount 和 diceBonus 不可同时为 0】`;
+    }
+
+    const { total: rollResult, formulaText } = diceService.rollParts(diceCount, diceSides, diceBonus);
     const oldValue = target[attr] ?? 0;
     const maxKey = attr === 'hp' ? 'maxHp' : 'maxSan';
     const maxValue = target[maxKey] ?? 99;
@@ -258,7 +266,7 @@ export class DamageResolver {
     // 检查清零
     this._checkDeparted(target, departedNpcs);
 
-    return `【${targetName} ${actionDesc}${delta}=${rollResult}点${attr.toUpperCase()}${changeDesc} → ${statusWord}】`;
+    return `【${targetName} ${actionDesc}${formulaText}点${attr.toUpperCase()}${changeDesc} → ${statusWord}】`;
   }
 
   /**
@@ -269,7 +277,9 @@ export class DamageResolver {
   _applyChangeDirect(session, change, departedNpcs) {
     const targetId = change[TARGET];
     const attr = change[ATTR_FIELD];
-    const delta = change[DELTA];
+    const diceCount = change[DICE_COUNT] ?? 0;
+    const diceSides = change[DICE_SIDES] ?? 0;
+    const diceBonus = change[DICE_BONUS] ?? 0;
     const effect = change[EFFECT];
 
     const target = this._findNpc(session, targetId);
@@ -277,7 +287,12 @@ export class DamageResolver {
       return `【变化失败：未找到目标 ${targetId}】`;
     }
 
-    const rollResult = diceService.rollFormula(delta);
+    // 跨字段约束（schema 无法表达，代码层校验）
+    if (diceCount === 0 && diceBonus === 0) {
+      return `【变化失败：diceCount 和 diceBonus 不可同时为 0】`;
+    }
+
+    const { total: rollResult, formulaText } = diceService.rollParts(diceCount, diceSides, diceBonus);
     const oldValue = target[attr] ?? 0;
     const maxKey = attr === 'hp' ? 'maxHp' : 'maxSan';
     const maxValue = target[maxKey] ?? 99;
@@ -298,7 +313,7 @@ export class DamageResolver {
 
     this._checkDeparted(target, departedNpcs);
 
-    return `【${attrUpper} 变化投掷结果为${rollResult}，${attrUpper} ${changeSymbol}${rollResult}，${targetName} 当前 ${attrUpper}: ${newValue}】`;
+    return `【${attrUpper} 变化${formulaText}，${attrUpper} ${changeSymbol}${rollResult}，${targetName} 当前 ${attrUpper}: ${newValue}】`;
   }
 
   /**

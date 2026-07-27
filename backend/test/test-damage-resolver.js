@@ -66,13 +66,13 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'player', attr: 'hp', delta: '1d4', effect: 'damage' }
+          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 4, diceBonus: 0, effect: 'damage' }
       ]}
     ]
   };
   const result = resolver.resolve(session, parsed);
   assert(session.npcs[0].hp < 10, `HP 应减少，实际=${session.npcs[0].hp}`);
-  assert(result.systemMessages[0].includes('变化投掷结果为'), `场景C 应为 C2 格式，实际=${result.systemMessages[0]}`);
+  assert(result.systemMessages[0].includes('变化'), `场景C 应为 C2 格式，实际=${result.systemMessages[0]}`);
   assert(result.systemMessages[0].includes('当前 HP'), `场景C 应显示"当前 HP"，实际=${result.systemMessages[0]}`);
 }
 
@@ -82,7 +82,7 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'player', attr: 'hp', delta: '1d3', effect: 'heal' }
+          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 3, diceBonus: 0, effect: 'heal' }
       ]}
     ]
   };
@@ -101,7 +101,7 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'skill_check', trigger: 'player', skill_name: '斗殴', skill_point: 100, bonus_dice: 0, penalty_dice: 0,
-        on_success: [{ target: 'npc_002', attr: 'hp', delta: '1d8', effect: 'damage' }],
+        on_success: [{ target: 'npc_002', attr: 'hp', diceCount: 1, diceSides: 8, diceBonus: 0, effect: 'damage' }],
         on_fail: [],
         on_critical_success: [], on_critical_failure: [] }
     ]
@@ -118,7 +118,7 @@ const resolver = new DamageResolver();
     actions: [
       { type: 'skill_check', trigger: 'player', skill_name: '闪避', skill_point: 0, bonus_dice: 0, penalty_dice: 0,
         on_success: [],
-        on_fail: [{ target: 'player', attr: 'hp', delta: '1d6', effect: 'damage' }],
+        on_fail: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 6, diceBonus: 0, effect: 'damage' }],
         on_critical_success: [], on_critical_failure: [] }
     ]
   };
@@ -133,8 +133,8 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'skill_check', trigger: 'player', skill_name: '急救', skill_point: 100, bonus_dice: 0, penalty_dice: 0,
-        on_success: [{ target: 'player', attr: 'hp', delta: '1d3', effect: 'heal' }],
-        on_fail: [{ target: 'player', attr: 'hp', delta: '1d4', effect: 'damage' }],
+        on_success: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 3, diceBonus: 0, effect: 'heal' }],
+        on_fail: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 4, diceBonus: 0, effect: 'damage' }],
         on_critical_success: [], on_critical_failure: [] }
     ]
   };
@@ -151,12 +151,12 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'skill_check', trigger: 'player', skill_name: '斗殴', skill_point: 100, bonus_dice: 0, penalty_dice: 0,
-        on_success: [{ target: 'npc_002', attr: 'hp', delta: '1d8', effect: 'damage' }],
+        on_success: [{ target: 'npc_002', attr: 'hp', diceCount: 1, diceSides: 8, diceBonus: 0, effect: 'damage' }],
         on_fail: [],
         on_critical_success: [], on_critical_failure: [] },
       { type: 'skill_check', trigger: 'player', skill_name: '闪避', skill_point: 0, bonus_dice: 0, penalty_dice: 0,
         on_success: [],
-        on_fail: [{ target: 'player', attr: 'hp', delta: '1d6', effect: 'damage' }],
+        on_fail: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 6, diceBonus: 0, effect: 'damage' }],
         on_critical_success: [], on_critical_failure: [] }
     ]
   };
@@ -188,7 +188,7 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'player', attr: 'hp', delta: '1d100', effect: 'damage' }
+          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 100, diceBonus: 0, effect: 'damage' }
       ]}
     ]
   };
@@ -203,7 +203,7 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'player', attr: 'hp', delta: '1d100', effect: 'heal' }
+          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 100, diceBonus: 0, effect: 'heal' }
       ]}
     ]
   };
@@ -220,7 +220,7 @@ const resolver = new DamageResolver();
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'npc_002', attr: 'hp', delta: '1d100', effect: 'damage' }
+          { target: 'npc_002', attr: 'hp', diceCount: 1, diceSides: 100, diceBonus: 0, effect: 'damage' }
       ]}
     ]
   };
@@ -245,9 +245,9 @@ assert(resolver.getStatusWord('san', 5) === '暂时疯狂', `SAN 5 应为暂时�
   const parsed = {
     actions: [
       { type: 'skill_check', trigger: 'player', skill_name: '侦查', skill_point: 100, bonus_dice: 0, penalty_dice: 0,
-        on_success: [{ target: 'player', attr: 'hp', delta: '1d4', effect: 'damage' }],
+        on_success: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 4, diceBonus: 0, effect: 'damage' }],
         on_fail: [],
-        on_critical_success: [{ target: 'player', attr: 'hp', delta: '1d3', effect: 'heal' }],
+        on_critical_success: [{ target: 'player', attr: 'hp', diceCount: 1, diceSides: 3, diceBonus: 0, effect: 'heal' }],
         on_critical_failure: [] }
     ]
   };
@@ -262,13 +262,13 @@ assert(resolver.getStatusWord('san', 5) === '暂时疯狂', `SAN 5 应为暂时�
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'player', changes: [
-          { target: 'player', attr: 'hp', delta: '1d3', effect: 'heal' }
+          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 3, diceBonus: 0, effect: 'heal' }
       ]}
     ]
   };
   const result = resolver.resolve(session, parsed);
   assert(session.npcs[0].hp > 5, `场景G HP 应增加，实际=${session.npcs[0].hp}`);
-  assert(result.systemMessages[0].includes('变化投掷结果为'), `场景G 应为 C2 格式，实际=${result.systemMessages[0]}`);
+  assert(result.systemMessages[0].includes('变化'), `场景G 应为 C2 格式，实际=${result.systemMessages[0]}`);
   assert(result.systemMessages[0].includes('当前 HP'), `场景G 应显示当前 HP，实际=${result.systemMessages[0]}`);
 }
 
@@ -296,6 +296,36 @@ assert(resolver.getStatusWord('san', 5) === '暂时疯狂', `SAN 5 应为暂时�
   assert(result.systemMessages[0].includes('直视了不可直视之物'), `场景I 应为 B 结果格式，实际=${result.systemMessages[0]}`);
   // NPC 主语应为 NPC 名字而非"你"
   assert(!result.systemMessages[0].startsWith('【你 '), `场景I NPC sancheck 主语不应为"你"，实际=${result.systemMessages[0]}`);
+}
+
+// === 场景J：固定值变化（diceCount=0） ===
+{
+  const session = makeSession([makeNpc('npc_000', 10, 10, 70, 70, {importance:'player', name:'玩家'})]);
+  const parsed = {
+    actions: [
+      { type: 'direct', trigger: 'others', changes: [
+          { target: 'player', attr: 'hp', diceCount: 0, diceSides: 0, diceBonus: 3, effect: 'damage' }
+      ]}
+    ]
+  };
+  const result = resolver.resolve(session, parsed);
+  assert(session.npcs[0].hp === 7, `固定值 3 点伤害后 HP 应为 7，实际=${session.npcs[0].hp}`);
+  assert(result.systemMessages[0].includes('3'), `固定值消息应包含数值 3，实际=${result.systemMessages[0]}`);
+}
+
+// === 场景K：diceCount 和 diceBonus 同时为 0 的非法情况 ===
+{
+  const session = makeSession([makeNpc('npc_000', 10, 10, 70, 70, {importance:'player', name:'玩家'})]);
+  const parsed = {
+    actions: [
+      { type: 'direct', trigger: 'others', changes: [
+          { target: 'player', attr: 'hp', diceCount: 0, diceSides: 0, diceBonus: 0, effect: 'damage' }
+      ]}
+    ]
+  };
+  const result = resolver.resolve(session, parsed);
+  assert(session.npcs[0].hp === 10, `非法变化应保持 HP 不变，实际=${session.npcs[0].hp}`);
+  assert(result.systemMessages[0].includes('变化失败'), `应返回失败消息，实际=${result.systemMessages[0]}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

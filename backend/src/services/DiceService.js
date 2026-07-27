@@ -50,6 +50,32 @@ export class DiceService {
   }
 
   /**
+   * 结构化骰子投掷（支持固定值模式）。
+   * @param {number} count - 骰子数量。0=固定值模式（不投骰，total=bonus）
+   * @param {number} sides - 骰子面数（count=0 时忽略）
+   * @param {number} bonus - 附加值（count=0 时作为固定变化值）
+   * @returns {{total: number, formulaText: string}}
+   *   - total: 投掷结果总和（含加成）
+   *   - formulaText: 人类可读的公式文本（如 '1d4=3', '2d6+1=8', '5'）
+   */
+  rollParts(count, sides, bonus) {
+    // 固定值模式：不投骰
+    if (count === 0) {
+      return { total: bonus, formulaText: `${bonus}` };
+    }
+    // 投骰模式
+    if (count < 1 || count > 100) throw new Error(`骰子数量超限: ${count}`);
+    if (sides < 2 || sides > 1000) throw new Error(`骰子面数超限: ${sides}`);
+
+    let total = bonus;
+    for (let i = 0; i < count; i++) {
+      total += this.rollDie(sides);
+    }
+    const bonusText = bonus > 0 ? `+${bonus}` : '';
+    return { total, formulaText: `${count}d${sides}${bonusText}=${total}` };
+  }
+
+  /**
    * 1d100 投掷 + 惩罚/奖励骰（CoC 7e 规则）。
    * 1d100 = 十位骰(d10×10) + 个位骰(d10)。
    * 奖励骰：多投十位骰，取较小十位（让结果更易成功）。

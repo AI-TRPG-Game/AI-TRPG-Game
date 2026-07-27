@@ -78,8 +78,7 @@ actions字段语义（字段结构由schema强制）：
 - skill_check.trigger/direct.trigger：'player'=玩家主动行为触发判定；'others'=NPC主动或环境被动触发
 - sancheck.trigger：固定'others'
 
-on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级变化。
-   叙事性后果在后续 narration 中体现
+on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级变化，叙事性后果在后续 narration 中体现
 
 ${buildEntityReferenceRules(false)}`;
 

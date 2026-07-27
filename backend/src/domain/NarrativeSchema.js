@@ -57,7 +57,9 @@ export const PENALTY_DICE = 'penalty_dice';
 // changeItem 字段常量
 export const TARGET = 'target';
 export const ATTR_FIELD = 'attr';        // 避免与保留字冲突
-export const DELTA = 'delta';
+export const DICE_COUNT = 'diceCount';
+export const DICE_SIDES = 'diceSides';
+export const DICE_BONUS = 'diceBonus';
 export const EFFECT = 'effect';
 
 // === trigger 字段常量（区分检定场景） ===

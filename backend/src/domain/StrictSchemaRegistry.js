@@ -18,7 +18,7 @@ import {
   ITEM_STATUS,
   ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
-  TARGET, ATTR_FIELD, DELTA, EFFECT,
+  TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
   ON_CRITICAL_SUCCESS, ON_CRITICAL_FAILURE,
   ENDING_TYPE, ENDING_TEXT,
@@ -149,10 +149,12 @@ const changeItemSchema = {
   properties: {
     [TARGET]: { type: 'string', description: "目标角色 ID，如 'player'（=npc_000）或 'npc_001'/'npc_102' 等" },
     [ATTR_FIELD]: { type: 'string', enum: ['hp', 'san'], description: '变化的属性' },
-    [DELTA]: { type: 'string', pattern: '^\\d+d\\d+(\\+\\d+)?$', description: "骰子公式，如 '1d4', '1d8', '2d6+1'" },
+    [DICE_COUNT]: { type: 'integer', minimum: 0, maximum: 10, description: '骰子数量。0=固定值变化；≥1=投骰' },
+    [DICE_SIDES]: { type: 'integer', minimum: 0, maximum: 100, description: '骰子面数。diceCount=0 时此字段填 0' },
+    [DICE_BONUS]: { type: 'integer', minimum: 0, maximum: 99, description: '附加值。diceCount=0 时不可为0，代表固定变化值。' },
     [EFFECT]: { type: 'string', enum: ['damage', 'heal'], description: '伤害或治疗' },
   },
-  required: [TARGET, ATTR_FIELD, DELTA, EFFECT],
+  required: [TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT],
   additionalProperties: false,
 };
 
@@ -164,9 +166,9 @@ const skillCheckActionSchema = {
     [TRIGGER]: {
       type: 'string',
       enum: [TRIGGER_PLAYER, TRIGGER_OTHERS],
-      description: "触发来源：'player'=玩家主动声明使用技能；'others'=NPC 主动掷骰或环境被动触发玩家技能检定（如 NPC 攻击玩家触发玩家闪避）",
+      description: "触发来源：'player'=玩家主动声明使用技能；'others'=NPC 主动掷骰、玩家技能被动触发等",
     },
-    skill_name: { type: 'string', description: '技能名称，如 斗殴/闪避/攀爬/急救' },
+    skill_name: { type: 'string', description: '技能名称' },
     skill_point: { type: 'integer', minimum: 0, maximum: 100, description: '技能点数' },
     [BONUS_DICE]: { type: 'integer', minimum: 0, maximum: 2, description: '奖励骰数量（0-2）' },
     [PENALTY_DICE]: { type: 'integer', minimum: 0, maximum: 2, description: '惩罚骰数量（0-2）' },
@@ -188,9 +190,9 @@ const sancheckActionSchema = {
     [TRIGGER]: {
       type: 'string',
       enum: [TRIGGER_OTHERS],
-      description: "触发来源：固定 'others'（玩家不会主动要求 SAN 检定）",
+      description: "触发来源：固定为 'others'",
     },
-    [TARGET]: { type: 'string', description: "检定目标，如 'player' 或 'npc_001'。系统自动查目标当前 SAN 作为阈值" },
+    [TARGET]: { type: 'string', description: "检定目标，填玩家/npc的id" },
   },
   required: [ACTION_TYPE, TRIGGER, TARGET],
   additionalProperties: false,
