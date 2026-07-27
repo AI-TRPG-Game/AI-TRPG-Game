@@ -629,7 +629,7 @@ export class GameOrchestrator {
     }
 
     while (result.branch === 'ACTIONS') {
-      result = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug);
+      result = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug, flowType);
     }
 
     return result;
@@ -900,7 +900,7 @@ export class GameOrchestrator {
 
   // ── Dice 分支处理 ──
 
-  async _handleDiceBranch(session, actionsResult, reasoningContent, debugLogs, onDebug) {
+  async _handleDiceBranch(session, actionsResult, reasoningContent, debugLogs, onDebug, sourceFlowType) {
     session.subState = SubState.DICE_PENDING;
     // 计算 hasS：actions 数组中是否含 sancheck
     const actions = actionsResult.actions || [];
@@ -913,6 +913,8 @@ export class GameOrchestrator {
       pendingRaw: actionsResult.raw,
       // 保存该轮次的 reasoning_content（DeepSeek 官方要求：工具调用轮次后续必须回传，否则 API 400）
       pendingReasoningContent: reasoningContent || null,
+      // 保存来源 flowType，_executeDice 推入 chatRecord 时使用（避免硬编码 NARRATION_I）
+      sourceFlowType: sourceFlowType || FlowType.NARRATION_I,
       rollbackChatLen: session.chatRecord.length,
       rollbackDisplayLen: (session.displayLog || []).length,
       // 新增：弹窗阶段状态机
@@ -1014,16 +1016,21 @@ export class GameOrchestrator {
     // 用户已确认 —— 将本次触发 actions 的 narration 和【】写入 chatRecord
     // 方案 B：pendingParsed 带 parsed + flowType，让历史 assistant 消息呈 tool_calls 结构
     const pendingParsed = jsonOutputParser.parse(pendingRaw);
-    // 从 pendingDiceFlow 取回该轮次的 reasoning_content
+    // 从 pendingDiceFlow 取回该轮次的 reasoning_content 和来源 flowType
     // DeepSeek 官方要求：思考模式下工具调用轮次的 reasoning_content 在后续所有请求中必须回传，否则 API 400
     const pendingReasoningContent = session.pendingDiceFlow?.pendingReasoningContent || null;
+    const sourceFlowType = session.pendingDiceFlow?.sourceFlowType || FlowType.NARRATION_I;
+
+    // 清空遗留的 optionBuffer（与 cancelDice 一致，避免确认路径残留上一轮 options）
+    session.optionBuffer = '';
+
     if (pendingParsed?.narration) {
       const pendingEntry = {
         role: ChatRole.KP,
         type: ChatEntryType.NARRATION,
         content: pendingParsed.narration,
         parsed: pendingParsed,
-        flowType: FlowType.NARRATION_I,
+        flowType: sourceFlowType,
         timestamp: new Date().toISOString(),
       };
       // 附加 reasoning_content，使 chatRecordToMessages 能注入到 assistant 消息中回传给 API
@@ -1040,6 +1047,13 @@ export class GameOrchestrator {
         content: pendingBracket,
         timestamp: new Date().toISOString(),
       });
+    }
+
+    // 补充处理 pendingParsed 中的实体更新（npcs/locations/items）
+    // OutputProcessor 的 ACTIONS 分支跳过了 applyNarrative，此处补调以恢复实体更新
+    // skipChatRecord=true 避免重复推入 chatRecord（上方已手动推入以附加 reasoningContent）
+    if (pendingParsed) {
+      entityUpdater.applyNarrative(session, pendingParsed, pendingRaw, sourceFlowType, { skipChatRecord: true });
     }
 
     // 调用 DamageResolver 处理 actions 数组（掷骰 + HP/SAN 计算 + 系统消息生成）
@@ -1083,15 +1097,6 @@ export class GameOrchestrator {
       onDebug
     );
 
-    const bracketFallback = this._extractBracketOutsideNarration(raw);
-    if (bracketFallback) {
-      session.chatRecord.push({
-        role: ChatRole.KP,
-        type: ChatEntryType.NARRATION,
-        content: bracketFallback,
-        timestamp: new Date().toISOString(),
-      });
-    }
     this._pushDisplay(session, 'kp', refinedHtml);
 
     const parsed = jsonOutputParser.parse(raw);
@@ -1099,13 +1104,27 @@ export class GameOrchestrator {
     result.debugLogs = debugLogs;
     result.refinedHtml = refinedHtml;
 
-    // 持久化 reasoning_content 到最近推入 chatRecord 的 KP 条目（1:1 精确匹配）
-    if (reasoningContent && result.branch === 'NARRATIVE') {
-      const lastKpEntry = [...session.chatRecord].reverse().find(
-        e => e.role === ChatRole.KP && e.parsed && e.flowType
-      );
-      if (lastKpEntry && !lastKpEntry.reasoningContent) {
-        lastKpEntry.reasoningContent = reasoningContent;
+    // NARRATION_II 输出 actions 时，不推入 bracket（延迟到用户确认后由 _executeDice 推入）
+    // 与 _runLlmFlow 的 ACTIONS 分支处理保持一致，避免取消掷骰后 bracket 残留
+    if (result.branch !== 'ACTIONS') {
+      const bracketFallback = this._extractBracketOutsideNarration(raw);
+      if (bracketFallback) {
+        session.chatRecord.push({
+          role: ChatRole.KP,
+          type: ChatEntryType.NARRATION,
+          content: bracketFallback,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      // 持久化 reasoning_content 到最近推入 chatRecord 的 KP 条目（1:1 精确匹配）
+      if (reasoningContent) {
+        const lastKpEntry = [...session.chatRecord].reverse().find(
+          e => e.role === ChatRole.KP && e.parsed && e.flowType
+        );
+        if (lastKpEntry && !lastKpEntry.reasoningContent) {
+          lastKpEntry.reasoningContent = reasoningContent;
+        }
       }
     }
 
@@ -1114,11 +1133,16 @@ export class GameOrchestrator {
     // 递归检测：从 'DICE' 改为 'ACTIONS'（与 OutputProcessor 返回值一致）
     while (result.branch === 'ACTIONS') {
       // NARRATION_II 返回 ACTIONS 时，同样需要保存该轮次的 reasoning_content
-      const diceCheck = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug);
+      const diceCheck = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug, FlowType.NARRATION_II);
       if (diceCheck.branch === 'DICE_AWAITING') {
         return diceCheck;
       }
       result = diceCheck;
+    }
+
+    // NARRATION_II 输出后触发摘要检查（与 handleMessage 的 LLM 调用后处理一致）
+    if (session.chatRecord.length > 0) {
+      await this.historySummarizer.checkAndRun(session);
     }
 
     session.pendingDiceFlow = null;

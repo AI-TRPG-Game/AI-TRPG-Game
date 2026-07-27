@@ -71,7 +71,7 @@ const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场npc填写数值，已存在的 npc 填 null（由系统管理）
 - actions与options互斥：
-  - actions非空=触发检定（options填null），narration在判定点自然切断
+  - actions非空=触发判定（options填null），narration在判定点自然切断
   - actions为null=正常推进，${OPTIONS_RULE}
 
 actions字段语义（字段结构由schema强制）：

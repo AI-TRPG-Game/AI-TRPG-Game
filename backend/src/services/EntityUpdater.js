@@ -250,8 +250,13 @@ export class EntityUpdater {
    * @param {object} session
    * @param {object} parsed - JSON.parse 后的对象
    * @param {string} rawText - 原始 JSON 文本
+   * @param {string} flowType
+   * @param {object} [options]
+   * @param {boolean} [options.skipChatRecord=false] - 跳过 chatRecord 推入（调用方已自行推入时使用）
    */
-  applyNarrative(session, parsed, rawText, flowType) {
+  applyNarrative(session, parsed, rawText, flowType, options = {}) {
+    const { skipChatRecord = false } = options;
+
     // 一次性迁移：给所有旧实体补 id 和缺失字段
     ensureIdsForExistingEntities(session);
 
@@ -266,21 +271,23 @@ export class EntityUpdater {
     //   {role: assistant, tool_calls: [...]} + {role: tool, ...} 消息对
     // 这样 LLM 看到的历史 assistant 消息格式 = 它被要求输出的格式，强化格式一致性
     // content 字段保留拼接文本，用于 rebuildDisplayLog 兜底（旧数据刷新时重建 displayLog）
-    const narration = parsed?.[NARRATION];
-    const opts = parsed?.[OPTIONS];
-    if (narration && typeof narration === 'string') {
-      let content = narration;
-      if (Array.isArray(opts) && opts.length > 0) {
-        content += '\n\n【请选择你接下来的行动】\n' + opts.join('\n');
+    if (!skipChatRecord) {
+      const narration = parsed?.[NARRATION];
+      const opts = parsed?.[OPTIONS];
+      if (narration && typeof narration === 'string') {
+        let content = narration;
+        if (Array.isArray(opts) && opts.length > 0) {
+          content += '\n\n【请选择你接下来的行动】\n' + opts.join('\n');
+        }
+        session.chatRecord.push({
+          role: ChatRole.KP,
+          type: ChatEntryType.NARRATION,
+          content,
+          parsed,
+          flowType: flowType || null,
+          timestamp: new Date().toISOString(),
+        });
       }
-      session.chatRecord.push({
-        role: ChatRole.KP,
-        type: ChatEntryType.NARRATION,
-        content,
-        parsed,
-        flowType: flowType || null,
-        timestamp: new Date().toISOString(),
-      });
     }
 
     // locations（JSON 数组）
@@ -309,8 +316,11 @@ export class EntityUpdater {
     const npcList = parsed?.[NPCS];
     if (Array.isArray(npcList)) {
       for (const npc of npcList) {
-        if (!npc[ENTITY_NAME]) continue;
-        // 防护：只有名字没 currentState（LLM 引用已有 NPC 但未填写任何动态状态）→ 跳过
+        // id 和 name 至少有一个非空：LLM 引用已有 NPC 时可能只填 id 不填 name
+        const hasId = npc[ENTITY_ID] && typeof npc[ENTITY_ID] === 'string';
+        const hasName = npc[ENTITY_NAME] && typeof npc[ENTITY_NAME] === 'string';
+        if (!hasId && !hasName) continue;
+        // 防护：只有 id/name 没 currentState（LLM 引用已有 NPC 但未填写任何动态状态）→ 跳过
         if (!npc[ENTITY_CURRENT_STATE]) continue;
         upsertEntity(
           patch.npcs,
@@ -364,6 +374,7 @@ export class EntityUpdater {
     // HP/SAN 由 DamageResolver 根据 actions 字段计算并直接更新 npc 条目，本函数不处理顶层 hp/san
 
     // options（JSON 数组 → 文本）—— 保留 optionBuffer 供前端渲染选项按钮
+    const opts = parsed?.[OPTIONS];
     if (Array.isArray(opts) && opts.length > 0) {
       session.optionBuffer = opts.join('\n');
     }
@@ -394,8 +405,17 @@ export class EntityUpdater {
   }
 
   applySummary(session, summaryText) {
-    // 保留最新两条（最新 user prompt + assistant 输出），其余用 summary 替换
-    const keep = session.chatRecord.slice(-2);
+    // 保留最后一条 user 消息及其后的所有消息，确保最新一轮对话不被压缩
+    // 修复原 slice(-2) 的假设：actions 情境下末尾可能是 assistant+system 而非 user+assistant
+    let lastUserIdx = -1;
+    for (let i = session.chatRecord.length - 1; i >= 0; i--) {
+      if (session.chatRecord[i].role === ChatRole.PLAYER) {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    const keepFrom = lastUserIdx >= 0 ? lastUserIdx : session.chatRecord.length - 2;
+    const keep = keepFrom >= 0 ? session.chatRecord.slice(keepFrom) : [];
     session.chatRecord = [
       {
         role: ChatRole.KP,
