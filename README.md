@@ -205,6 +205,19 @@ npm run dev:all
 - `MVP分析/人物设定阶段.md` — 人物设定阶段的详细交互流程
 - `MVP分析/故事开幕与正常叙述.md` — 跑团核心循环的详细流程
 
+## Birch Station onboarding scenario
+
+**Birch Station: The Last Train** is a complete, time-driven solo CoC tutorial. Start it from the **Tutorial** button in the session menu, or create a session through `POST /sessions/tutorials/birch-station`.
+
+The investigation begins at 00:10 and ends when the train departs at 06:00. Each meaningful action advances the scenario clock by at least ten minutes, and scheduled events change the available leads and risks as time passes.
+
+- **SAN pressure:** horror checks use unease, major, and catastrophe tiers. Low SAN adds penalties and changes the investigator's state.
+- **Suspicion:** the 0–10 suspicion track makes suspects watch, obstruct, and eventually confront the investigator; higher suspicion also costs time.
+- **Evidence and truth:** only authored evidence can prove the murder, cover-up, seventh survivor, and culprit facts. A premature LLM claim cannot end the case.
+- **State-driven endings:** death, madness, the 06:00 deadline, and a player-declared final choice resolve through validated game state; the LLM writes the ending rather than deciding its eligibility.
+
+For a successful early resolution, secure enough evidence to establish at least three truth facts, then explicitly choose what to do with the truth: expose it, preserve it, suppress it, or withdraw.
+
 ## License
 
 MIT
