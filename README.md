@@ -205,18 +205,18 @@ npm run dev:all
 - `MVP分析/人物设定阶段.md` — 人物设定阶段的详细交互流程
 - `MVP分析/故事开幕与正常叙述.md` — 跑团核心循环的详细流程
 
-## Birch Station onboarding scenario
+## 白桦站新手试炼
 
-**Birch Station: The Last Train** is a complete, time-driven solo CoC tutorial. Start it from the **Tutorial** button in the session menu, or create a session through `POST /sessions/tutorials/birch-station`.
+**《白桦站的末班车》** 是一场完整、由时间驱动的 CoC 单人新手试炼。可在会话菜单中点击 **试炼** 按钮开始，或通过 `POST /sessions/tutorials/birch-station` 创建会话。
 
-The investigation begins at 00:10 and ends when the train departs at 06:00. Each meaningful action advances the scenario clock by at least ten minutes, and scheduled events change the available leads and risks as time passes.
+调查从 00:10 开始，并在列车于 06:00 恢复通行时结束。每次有实际意义的行动至少推进十分钟；随着时间流逝，计划事件会改变可获得的线索、风险与可选行动。
 
-- **SAN pressure:** horror checks use unease, major, and catastrophe tiers. Low SAN adds penalties and changes the investigator's state.
-- **Suspicion:** the 0–10 suspicion track makes suspects watch, obstruct, and eventually confront the investigator; higher suspicion also costs time.
-- **Evidence and truth:** only authored evidence can prove the murder, cover-up, seventh survivor, and culprit facts. A premature LLM claim cannot end the case.
-- **State-driven endings:** death, madness, the 06:00 deadline, and a player-declared final choice resolve through validated game state; the LLM writes the ending rather than deciding its eligibility.
+- **SAN 压力：** 恐怖检定分为不安、重大揭示与灾变三个等级。低 SAN 会施加惩罚骰，并改变调查员的精神状态。
+- **怀疑度：** 0–10 的怀疑度会让嫌疑人开始监视、阻挠，最终公开对抗调查员；较高怀疑度还会额外消耗时间。
+- **证据与真相：** 只有剧本预设的证据才能证明谋杀、掩盖行动、第七名幸存者与凶手关联等事实；LLM 的叙事性断言不能提前结束案件。
+- **状态驱动结局：** 死亡、疯狂、06:00 截止时间，以及玩家明确作出的最终选择，都会由已验证的游戏状态决定；LLM 只负责书写结局，而不决定结局是否可触发。
 
-For a successful early resolution, secure enough evidence to establish at least three truth facts, then explicitly choose what to do with the truth: expose it, preserve it, suppress it, or withdraw.
+若要在截止前达成结局，请先保全足以确立至少三项真相事实的证据，再明确决定如何处置真相：公开、保全、压下，或撤离。
 
 ## License
 
