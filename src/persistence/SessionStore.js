@@ -68,6 +68,17 @@ function normalizeSession(session) {
     recentReasoningContents: Array.isArray(session.recentReasoningContents)
       ? session.recentReasoningContents.slice(-10)
       : [],
+    // 新手试炼的时间驱动状态必须与普通会话一起持久化。
+    // 此前 normalizeSession 丢弃这些字段，导致 API 已创建的试炼会话
+    // 一写入 IndexedDB 就退化为没有时钟的普通会话。
+    scenarioId: session.scenarioId ?? null,
+    scenarioRules: session.scenarioRules ?? null,
+    scenarioClock: session.scenarioClock ?? null,
+    scheduledEvents: Array.isArray(session.scheduledEvents) ? session.scheduledEvents : [],
+    evidence: Array.isArray(session.evidence) ? session.evidence : [],
+    suspicion: Number.isFinite(session.suspicion) ? session.suspicion : 0,
+    combat: session.combat ?? null,
+    endingState: session.endingState ?? null,
     createdAt: session.createdAt || now,
     updatedAt: session.updatedAt || now,
     sortOrder: session.sortOrder ?? Date.now(),

@@ -1,6 +1,6 @@
 import { diceService } from './DiceService.js';
 import {
-  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, DIRECT,
+  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
   TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
@@ -82,11 +82,20 @@ export class DamageResolver {
    * 大成功 → on_critical_success；大失败 → on_critical_failure；
    * 其余成功 → on_success；失败 → on_fail
    */
+  _sanPenaltyDice(session) {
+    if (!session.scenarioId) return 0;
+    const player = this._findNpc(session, 'player');
+    if (!player || player.san == null) return 0;
+    if (player.san <= 20) return 2;
+    if (player.san <= 40) return 1;
+    return 0;
+  }
+
   _processPlayerSkillCheck(session, action, departedNpcs) {
     const skillName = action.skill_name;
     const skillPoint = action.skill_point;
     const bonusDice = action[BONUS_DICE] || 0;
-    const penaltyDice = action[PENALTY_DICE] || 0;
+    const penaltyDice = Math.min(2, (action[PENALTY_DICE] || 0) + this._sanPenaltyDice(session));
     const onSuccess = action[ON_SUCCESS] || [];
     const onFail = action[ON_FAIL] || [];
     const onCriticalSuccess = action[ON_CRITICAL_SUCCESS] || [];
@@ -181,7 +190,13 @@ export class DamageResolver {
     const roll = diceService.rollWithBonusPenalty(0, 0);
     const isSuccess = roll.value <= sanValue;
 
-    const damageFormula = isSuccess ? '1d3' : '1d6';
+    const severity = action[SAN_SEVERITY] || 'major';
+    const formulas = {
+      unease: { success: '1d2', failure: '1d4' },
+      major: { success: '1d4', failure: '1d8' },
+      catastrophe: { success: '1d6', failure: '2d6' },
+    };
+    const damageFormula = (formulas[severity] || formulas.major)[isSuccess ? 'success' : 'failure'];
     const damage = diceService.rollFormula(damageFormula);
 
     const oldSan = target.san;
@@ -197,7 +212,7 @@ export class DamageResolver {
 
     this._checkDeparted(target, departedNpcs);
 
-    return [msg];
+    return [`${msg} [SAN severity: ${severity}]`];
   }
 
   /**

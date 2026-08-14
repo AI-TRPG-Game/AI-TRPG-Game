@@ -4,6 +4,7 @@ import { optionResolver } from '../src/services/OptionResolver.js';
 import { inputAssembler } from '../src/services/InputAssembler.js';
 import { FlowType, SubState } from '../src/domain/enums.js';
 import { GameSession } from '../src/domain/GameSession.js';
+import { buildNarrationStrictSchema } from '../src/domain/StrictSchemaRegistry.js';
 import { getDatabase } from '../src/persistence/database.js';
 import { SessionRepository } from '../src/persistence/SessionRepository.js';
 
@@ -79,6 +80,13 @@ const diceSession = new GameSession({
 console.assert(
   diceSession.toClientJSON().subState === SubState.DICE_PENDING,
   'client snapshot preserves dice pending state'
+);
+
+const narrationSchema = buildNarrationStrictSchema();
+console.assert(
+  Object.keys(narrationSchema.properties).every(key => narrationSchema.required.includes(key)) &&
+  narrationSchema.required.length === Object.keys(narrationSchema.properties).length,
+  'strict narration schema requires every declared property'
 );
 
 console.log('All tests passed');

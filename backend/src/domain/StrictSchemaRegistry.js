@@ -16,7 +16,7 @@ import {
   SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION,
   ENTITY_ID, ENTITY_NAME, ENTITY_DESC, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE,
   ITEM_STATUS,
-  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, DIRECT,
+  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
   TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
@@ -186,6 +186,7 @@ const skillCheckActionSchema = {
 const sancheckActionSchema = {
   type: 'object',
   properties: {
+    [SAN_SEVERITY]: { type: 'string', enum: ['unease', 'major', 'catastrophe'], description: 'SAN loss tier, resolved by backend rules.' },
     [ACTION_TYPE]: { type: 'string', enum: [SANCHECK] },
     [TRIGGER]: {
       type: 'string',
@@ -194,7 +195,7 @@ const sancheckActionSchema = {
     },
     [TARGET]: { type: 'string', description: "检定目标，填玩家/npc的id" },
   },
-  required: [ACTION_TYPE, TRIGGER, TARGET],
+  required: [ACTION_TYPE, TRIGGER, TARGET, SAN_SEVERITY],
   additionalProperties: false,
 };
 
@@ -348,8 +349,40 @@ export function buildNarrationStrictSchema() {
         description: '检定与变化数组。null=无检定（填 options）；非空数组=有检定（options 填 null）',
       },
       [OPTIONS]: nullableOptionsSchema,
+      time_cost_minutes: { type: 'integer', minimum: 0, maximum: 120, description: '本次有效行动消耗的游戏内分钟数；普通剧本填0，新手试炼必须为1-120' },
+      time_cost_rationale: { type: 'string', description: '本次耗时的简短依据；普通剧本可填空字符串' },
+      evidence_changes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' }, category: { type: 'string' }, source: { type: 'string' },
+            reliability: { type: 'string', enum: ['low', 'medium', 'high'] }, secured: { type: 'boolean' }, description: { type: 'string' },
+          },
+          required: ['id', 'category', 'source', 'reliability', 'secured', 'description'],
+          additionalProperties: false,
+        },
+      },
+      suspicion_delta: { type: 'integer', minimum: -3, maximum: 3 },
+      combat_update: {
+        anyOf: [
+          { type: 'object', properties: { active: { type: 'boolean' }, round: { type: 'integer' }, objective: { type: 'string' }, exitConditions: { type: 'array', items: { type: 'string' } }, participants: { type: 'array', items: { type: 'string' } } }, required: ['active', 'round', 'objective', 'exitConditions', 'participants'], additionalProperties: false },
+          { type: 'null' },
+        ],
+      },
+      ending_recommendation: {
+        type: 'object',
+        properties: { should_end: { type: 'boolean' }, reason: { type: 'string' } },
+        required: ['should_end', 'reason'], additionalProperties: false,
+      },
     },
-    required: [NARRATION, LOCATIONS, NPCS, ITEMS, ACTIONS, OPTIONS],
+    // DeepSeek strict tools 要求 required 与 properties 完全一致；
+    // 对普通剧本，新增剧本字段使用中性值而非省略。
+    required: [
+      NARRATION, LOCATIONS, NPCS, ITEMS, ACTIONS, OPTIONS,
+      'time_cost_minutes', 'time_cost_rationale', 'evidence_changes',
+      'suspicion_delta', 'combat_update', 'ending_recommendation',
+    ],
     additionalProperties: false,
   };
 }
@@ -372,15 +405,23 @@ const endingGenStrictSchema = {
   properties: {
     [ENDING_TYPE]: {
       type: 'string',
-      enum: ['death', 'madness'],
-      description: "结局类型：'death'=HP 归零死亡结局，'madness'=SAN 归零疯狂结局",
+      enum: ['truth_exposed', 'forbidden_cargo', 'truth_sunk', 'suppressed', 'withdrawal', 'death', 'madness', 'custom'],
+      description: '结局类型；前五项可在HP/SAN未归零时正常达成。',
     },
     [ENDING_TEXT]: {
       type: 'string',
       description: 'RPG 风格结局文本，如"达成 XXX 结局"。只描述结局，不提重新开始选项',
     },
+    debrief: {
+      type: 'object',
+      properties: {
+        hidden_plot: { type: 'string' }, important_events: { type: 'array', items: { type: 'string' } },
+        evidence_used: { type: 'array', items: { type: 'string' } }, missed_leads: { type: 'array', items: { type: 'string' } }, next_try: { type: 'string' },
+      },
+      required: ['hidden_plot', 'important_events', 'evidence_used', 'missed_leads', 'next_try'], additionalProperties: false,
+    },
   },
-  required: [ENDING_TYPE, ENDING_TEXT],
+  required: [ENDING_TYPE, ENDING_TEXT, 'debrief'],
   additionalProperties: false,
 };
 

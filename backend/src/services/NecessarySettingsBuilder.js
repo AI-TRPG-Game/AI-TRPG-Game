@@ -1,3 +1,5 @@
+import { scenarioProgressService } from './ScenarioProgressService.js';
+
 export class NecessarySettingsBuilder {
   build(session) {
     const lines = [
@@ -66,6 +68,21 @@ export class NecessarySettingsBuilder {
           lines.push(parts.join(' '));
         }
       }
+    }
+
+    if (session.scenarioClock) {
+      const sanState = scenarioProgressService.getPlayerSanState(session);
+      const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
+      const truthProgress = scenarioProgressService.evaluateTruth(session);
+      lines.push(`SAN state: ${sanState.label}. Suspicion state: ${suspicionState.label} (${suspicionState.effect})`);
+      lines.push(`Truth progress: ${truthProgress.factCount}/${truthProgress.totalFacts} proven facts; known=${truthProgress.truthKnown}; provable=${truthProgress.truthProvable}.`);
+      if (session.scenarioRules?.clueCatalog) {
+        lines.push(`Allowed evidence IDs (do not reveal or award one without narrative support): ${Object.keys(session.scenarioRules.clueCatalog).join(', ')}.`);
+      }
+      lines.push('', `剧本时钟：${session.scenarioClock.currentTime}，截止 ${session.scenarioClock.deadline}，第 ${session.scenarioClock.turn} 回合，阶段 ${session.scenarioClock.phase}。`);
+      lines.push(`怀疑度：${session.suspicion ?? 0}/10。`);
+      const secured = (session.evidence || []).filter(e => e.secured);
+      if (secured.length) lines.push(`已保全证据：${secured.map(e => `${e.id}(${e.source})`).join('；')}。`);
     }
 
     return lines.join('\n');

@@ -331,10 +331,13 @@ export class InputAssembler {
 
     // 结局指示
     const player = session.npcs.find(n => n.id === 'npc_000');
-    const endingType = endingService.getEndingType(player);
+    const endingType = session.endingState?.endingType || (player ? endingService.getEndingType(player) : 'withdrawal');
+    const forcedReason = session.endingState?.reason;
     messages.push({
       role: 'user',
-      content: `玩家${endingType === 'death' ? 'HP 归零' : 'SAN 归零'}，请生成 ${endingType} 类型的结局文本。`,
+      content: forcedReason
+        ? `结局触发原因：${forcedReason}。请根据完整状态生成合适结局，不要仅按HP/SAN判断。`
+        : `玩家${endingType === 'death' ? 'HP 归零' : 'SAN 归零'}，请生成 ${endingType} 类型的结局文本。`,
     });
   }
 

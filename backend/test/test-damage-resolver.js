@@ -27,6 +27,11 @@ function makeNpc(id, hp, maxHp, san, maxSan, opts = {}) {
 
 const resolver = new DamageResolver();
 
+assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 40, 60, { importance: 'player' })] }) === 1,
+  'SAN 40 should apply one penalty die to player skill checks');
+assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 20, 60, { importance: 'player' })] }) === 2,
+  'SAN 20 should apply two penalty dice to player skill checks');
+
 // === 场景A：纯技能检定（无 HP/SAN 变化） ===
 {
   const session = makeSession([makeNpc('npc_000', 10, 10, 70, 70, {importance:'player', name:'玩家'})]);

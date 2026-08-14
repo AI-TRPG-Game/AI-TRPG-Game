@@ -32,6 +32,15 @@ export class GameSession {
     this.recentReasoningContents = Array.isArray(data.recentReasoningContents)
       ? data.recentReasoningContents.slice(-10)
       : [];
+    // 剧本驱动状态。普通自由剧本保持 null / 空数组，保证旧存档兼容。
+    this.scenarioId = data.scenarioId ?? null;
+    this.scenarioRules = data.scenarioRules ?? null;
+    this.scenarioClock = data.scenarioClock ?? null;
+    this.scheduledEvents = Array.isArray(data.scheduledEvents) ? data.scheduledEvents : [];
+    this.evidence = Array.isArray(data.evidence) ? data.evidence : [];
+    this.suspicion = Number.isFinite(data.suspicion) ? data.suspicion : 0;
+    this.combat = data.combat ?? null;
+    this.endingState = data.endingState ?? null;
     this.createdAt = data.createdAt ?? new Date().toISOString();
     this.updatedAt = data.updatedAt ?? new Date().toISOString();
 
@@ -99,6 +108,10 @@ export class GameSession {
     // 3. 确保新增的缓存字段存在
     if (this.storyOpeningCache === undefined) this.storyOpeningCache = null;
     if (this.characterInitialStats === undefined) this.characterInitialStats = null;
+    if (this.scenarioClock && !Number.isInteger(this.scenarioClock.turn)) {
+      this.scenarioClock.turn = 0;
+    }
+    this.suspicion = Math.max(0, Math.min(10, Number(this.suspicion) || 0));
 
     // 4. 迁移 pendingDiceFlow（新增 dialogStage / hasS 字段）
     if (this.pendingDiceFlow) {
@@ -185,6 +198,14 @@ export class GameSession {
       storyOpeningCache: this.storyOpeningCache,
       characterInitialStats: this.characterInitialStats,
       recentReasoningContents: this.recentReasoningContents,
+      scenarioId: this.scenarioId,
+      scenarioRules: this.scenarioRules,
+      scenarioClock: this.scenarioClock,
+      scheduledEvents: this.scheduledEvents,
+      evidence: this.evidence,
+      suspicion: this.suspicion,
+      combat: this.combat,
+      endingState: this.endingState,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

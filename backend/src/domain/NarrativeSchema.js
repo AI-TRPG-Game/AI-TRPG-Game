@@ -47,6 +47,7 @@ export const ACTIONS = 'actions';
 export const ACTION_TYPE = 'type';
 export const SKILL_CHECK = 'skill_check';
 export const SANCHECK = 'sancheck';
+export const SAN_SEVERITY = 'san_severity';
 export const DIRECT = 'direct';
 export const ON_SUCCESS = 'on_success';
 export const ON_FAIL = 'on_fail';
@@ -83,6 +84,12 @@ export const BRANCH_B_SANCHECK_AWAITING = 'B_SANCHECK_AWAITING';
 // 结局字段常量
 export const ENDING_TYPE = 'ending_type';
 export const ENDING_TEXT = 'ending_text';
+export const TIME_COST_MINUTES = 'time_cost_minutes';
+export const TIME_COST_RATIONALE = 'time_cost_rationale';
+export const EVIDENCE_CHANGES = 'evidence_changes';
+export const SUSPICION_DELTA = 'suspicion_delta';
+export const COMBAT_UPDATE = 'combat_update';
+export const ENDING_RECOMMENDATION = 'ending_recommendation';
 
 // ── Prompt 文本片段 ──
 

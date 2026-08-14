@@ -292,6 +292,16 @@
             color: var(--text-muted);
             font-family: var(--font-mono);
         }
+        #scenario-status {
+            padding: 3px 7px;
+            border: 1px solid var(--border-normal);
+            border-radius: var(--radius-sm);
+            color: var(--accent);
+            background: var(--bg-card);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            white-space: nowrap;
+        }
 
         /* ── Theme Toggle ── */
         #btn-theme {
@@ -370,6 +380,20 @@
             max-width: 90%;
             text-align: center;
             border-radius: var(--radius-md);
+        }
+        /* 每个已结算回合的游戏内时间。与普通系统提示分开，避免被叙事淹没。 */
+        .message.turn-summary {
+            align-self: center;
+            max-width: 92%;
+            padding: 8px 14px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            background: rgba(212, 175, 55, 0.08);
+            border: 1px solid var(--divider-gold);
+            border-radius: var(--radius-md);
+            text-align: center;
         }
 
         /* 判定结果消息（区别于纯系统提示，金色边框 + 等宽字体） */
@@ -1199,6 +1223,7 @@
             <div id="session-sidebar-top">
                 <button id="btn-session-toggle" type="button" title="展开/收起会话列表 (Alt+S)" aria-label="展开或收起会话列表" aria-expanded="true">&#9776;</button>
                 <span id="session-sidebar-title">会话</span>
+                <button id="btn-tutorial-session" type="button" title="新手试炼：白桦站的末班车" aria-label="开始白桦站新手试炼">试炼</button>
                 <button id="btn-new-session" type="button" title="新建会话" aria-label="新建会话">+</button>
             </div>
             <div id="session-sidebar-content">
@@ -1213,6 +1238,7 @@
                     <button id="btn-theme" title="切换主题">&#9728;</button>
                     <button id="btn-godseye" title="God's Eye">&#128065;</button>
                     <span id="phase-label">阶段: -</span>
+                    <span id="scenario-status" aria-live="polite"></span>
                 </div>
             </div>
             <div id="messages"></div>

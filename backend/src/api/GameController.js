@@ -56,6 +56,15 @@ export function createGameController({ llmProvider }) {
     }
   });
 
+  router.post('/sessions/tutorials/birch-station', (req, res) => {
+    try {
+      const orchestrator = createStatelessOrchestrator({ session: null, llmProvider });
+      res.json(orchestrator.createBirchStationTutorial());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   router.post('/sessions/:id/enter-world', (req, res) => {
     try {
       const session = requireSession(req);

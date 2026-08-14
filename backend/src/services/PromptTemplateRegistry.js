@@ -80,9 +80,14 @@ actions字段语义（字段结构由schema强制）：
 
 on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级变化，叙事性后果在后续 narration 中体现
 
-${buildEntityReferenceRules(false)}`;
+每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}。若设定上下文含“剧本时钟”，则 time_cost_minutes 必须为1-120，耗时按行动复杂度、移动、对话和风险决定，不可固定；填写相应证据/怀疑度/危机更新。失败只能增加代价，不能永久封锁主线。未触发的计划事件不可剧透；自然收束时填写 ending_recommendation。
+
+${buildEntityReferenceRules(false)}
+
+For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity: unease, major, or catastrophe. Use unease for minor anomalies, major for core revelations, and catastrophe only for direct supernatural contact or the climax. Never invent evidence IDs: only update clues supplied in the scenario context. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
 
 const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
+For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity (unease, major, or catastrophe) on every sancheck. Only catalogued evidence IDs may be updated.
 任务：根据系统判定结果推进剧情。系统已完成掷骰和HP/SAN计算，直接承接推进，不重复输出判定格式。
 
 字段：
@@ -93,16 +98,19 @@ const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
 - npc.hp/san/maxHp/maxSan：仅首次出场时填写数值，已存在的 npc 填 null（由系统管理）
 - actions与options互斥：
   - actions非空=递归检定（options填null）
-  - actions为null=正常推进，${OPTIONS_RULE}`;
+  - actions为null=正常推进，${OPTIONS_RULE}
+
+每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}；若上下文含剧本时钟则按其规则裁定行动时间与状态。`;
 
 const SUMMARY_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：总结迄今剧情，保证后续可正常推进，暗示故事可能的伏笔。
 - summary：800-1000字`;
 
 const ENDING_GEN_INSTRUCTION = `${SYSTEM_PREFIX}
-任务：玩家HP或SAN归零，生成RPG风格结局文本。
-- ending_type：'death'（HP归零）或'madness'（SAN归零）
-- ending_text：结局文本，文学性强，呼应整个故事过程给玩家完整收尾感，100-300字`;
+任务：根据完整状态生成RPG风格结局与独立的主持人复盘。
+- ending_type：truth_exposed/forbidden_cargo/truth_sunk/suppressed/withdrawal/death/madness/custom；HP/SAN归零时优先death或madness。
+- ending_text：文学性结局，100-300字。
+- debrief：含剧透，说明隐藏真相、重要事件、实际使用的证据、错过线索与下次可尝试的行动。`;
 
 // ── temperature / max_tokens 配置 ──
 // 注意：思考模式下 reasoning_content 也消耗 max_tokens，需留足思考空间

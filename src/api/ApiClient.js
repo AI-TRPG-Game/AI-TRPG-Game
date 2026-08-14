@@ -11,6 +11,16 @@ export class ApiClient {
     return res.json();
   }
 
+  async createBirchStationTutorial() {
+    const res = await fetch(`${API_BASE}/sessions/tutorials/birch-station`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
   async getSession(sessionId) {
     throw new Error(`Session ${sessionId} is stored in IndexedDB`);
   }

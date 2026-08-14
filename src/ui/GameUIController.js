@@ -127,6 +127,7 @@ export class GameUIController {
     this.sendButton = document.getElementById('send-button');
     this.optionsBar = document.getElementById('options-bar');
     this.phaseLabel = document.getElementById('phase-label');
+    this.scenarioStatus = document.getElementById('scenario-status');
     this.worldPanel = document.getElementById('world-info');
     this.playerInfo = document.getElementById('player-info');
     this.playerPanel = document.getElementById('player-settings');
@@ -148,6 +149,7 @@ export class GameUIController {
     this.sessionSidebar = document.getElementById('session-sidebar');
     this.sessionToggleButton = document.getElementById('btn-session-toggle');
     this.newSessionButton = document.getElementById('btn-new-session');
+    this.tutorialSessionButton = document.getElementById('btn-tutorial-session');
     this.sessionListPanel = null;
 
     this.godseyePanel = document.getElementById('godseye-panel');
@@ -236,6 +238,7 @@ export class GameUIController {
     this.autoGenKeyCharBtn.addEventListener('click', () =>
       this._autoGenKeyChar()
     );
+    this.tutorialSessionButton.addEventListener('click', () => this._createBirchStationTutorial());
 
     document.getElementById('btn-godseye').addEventListener('click', () =>
       this._toggleGodseye()
@@ -325,6 +328,15 @@ export class GameUIController {
     const { session } = await apiClient.createSession();
     const worldResult = await apiClient.enterWorldSetting(session);
     await this._loadSession(worldResult.session);
+  }
+
+  async _createBirchStationTutorial() {
+    try {
+      const { session } = await apiClient.createBirchStationTutorial();
+      await this._loadSession(session);
+    } catch (err) {
+      this._appendMessage(`无法开始新手试炼: ${err.message}`, 'error');
+    }
   }
 
   async _loadSession(session) {
@@ -486,6 +498,9 @@ export class GameUIController {
    */
   _renderLlmResponse(resp, opts = {}) {
     const { result, systemMessages } = resp;
+    const previousClock = this.session?.scenarioClock
+      ? { currentTime: this.session.scenarioClock.currentTime, turn: this.session.scenarioClock.turn }
+      : null;
     this.session = resp.session;
 
     // 1. 渲染 system 消息（如 dice 系统提示、故事开幕提示等）
@@ -504,6 +519,27 @@ export class GameUIController {
       this._botEl = this._appendMessage('', 'bot');
       this._botEl.innerHTML = result.refinedHtml;
       this._scrollToBottom();
+    }
+
+    // 剧本时钟由后端在每个已结算回合附带；不能只依赖 displayLog，
+    // 否则实时游玩时会等到刷新/恢复会话后才看到计时结果。
+    if (Array.isArray(result?.scenarioMessages)) {
+      for (const [index, message] of result.scenarioMessages.entries()) {
+        this._appendMessage(message, index === 0 ? 'turn-summary' : 'system');
+      }
+    } else if (
+      this.session?.scenarioClock &&
+      previousClock &&
+      (previousClock.currentTime !== this.session.scenarioClock.currentTime ||
+        previousClock.turn !== this.session.scenarioClock.turn)
+    ) {
+      // 兼容未携带 scenarioMessages 的旧后端响应：只要时钟已经推进，
+      // 就不能让玩家错过这一回合的时间流逝。
+      const clock = this.session.scenarioClock;
+      this._appendMessage(
+        `【第${clock.turn}回合 · 游戏内时间推进：${previousClock.currentTime} → ${clock.currentTime} · 截止 ${clock.deadline}】`,
+        'turn-summary'
+      );
     }
 
     // 3. debug 日志已通过 onDebug 回调实时渲染到 god's eye 面板，这里不再处理 result.debugLogs
@@ -1008,6 +1044,16 @@ export class GameUIController {
     if (!this.session) return;
 
     this.phaseLabel.textContent = `阶段: ${this.session.phase} | 状态: ${this.session.subState}`;
+    if (this.session.scenarioClock) {
+      const clock = this.session.scenarioClock;
+      const secured = (this.session.evidence || []).filter(e => e.secured).length;
+      this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${clock.phase} · 证据 ${secured}/${(this.session.evidence || []).length} · 怀疑 ${this.session.suspicion ?? 0}/10`;
+      this.scenarioStatus.title = '新手试炼的游戏内时间、阶段、证据和怀疑度';
+    } else {
+      // 普通自由剧本没有剧本时钟；明确告知入口，避免把空白状态误认为显示故障。
+      this.scenarioStatus.textContent = '无剧本时钟 · 点击左上“试炼”开始';
+      this.scenarioStatus.title = '只有“新手试炼：白桦站的末班车”使用游戏内倒计时';
+    }
 
     // 世界观 —— 紧凑模式
     if (this.session.worldSettings) {
@@ -1135,6 +1181,10 @@ export class GameUIController {
       const hpStr = npc.hp != null ? `${npc.hp}/${npc.maxHp ?? '?'}` : '?';
       const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
       let line = `HP ${escapeHtml(hpStr)} | SAN ${escapeHtml(sanStr)}`;
+      if (npc.id === 'npc_000' && npc.san != null) {
+        const sanState = npc.san >= 50 ? 'stable' : npc.san >= 41 ? 'uneasy' : npc.san >= 21 ? 'shaken' : npc.san > 0 ? 'unstable' : 'madness';
+        line += ` | ${sanState}`;
+      }
       if (npc.attributes) {
         const attrStr = Object.entries(npc.attributes)
           .map(([k, v]) => `${k}${v}`)

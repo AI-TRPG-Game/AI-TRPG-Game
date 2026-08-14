@@ -27,6 +27,9 @@ import {
   SANCHECK,
 } from '../domain/NarrativeSchema.js';
 import { textRefiner } from '../services/TextRefiner.js';
+import { scheduleService } from '../services/ScheduleService.js';
+import { scenarioProgressService } from '../services/ScenarioProgressService.js';
+import { BIRCH_STATION_TUTORIAL } from '../scenarios/birchStation.js';
 
 function escapeHtml(s) {
   // 仅转义会破坏 HTML 结构的字符（& < >），不转义 "（innerHTML 会解码回来）
@@ -74,6 +77,51 @@ export class GameOrchestrator {
 
   createSession(title) {
     return this.repository.create(title);
+  }
+
+  createBirchStationTutorial() {
+    const definition = BIRCH_STATION_TUTORIAL;
+    const session = this.repository.create(definition.title);
+    session.phase = Phase.STORY_PLAY;
+    session.subState = SubState.AWAITING_INPUT;
+    session.openingDone = true;
+    session.scenarioId = definition.id;
+    session.scenarioRules = structuredClone(definition.scenarioRules);
+    session.scenarioClock = { currentTime: '00:10', deadline: '06:00', turn: 0, phase: 'hook' };
+    session.scheduledEvents = structuredClone(definition.scheduledEvents);
+    session.worldSettings = definition.worldSettings;
+    session.player = definition.player;
+    session.locations = structuredClone(definition.locations);
+    session.npcs = structuredClone(definition.npcs);
+    session.inventory = structuredClone(definition.inventory);
+    session.evidence = structuredClone(definition.evidence);
+    session.suspicion = 0;
+    const openingParsed = {
+      narration: definition.opening.narration,
+      locations: [], npcs: [], items: [], actions: null,
+      options: definition.opening.options,
+      time_cost_minutes: 0,
+      time_cost_rationale: '',
+      evidence_changes: [],
+      suspicion_delta: 0,
+      combat_update: null,
+      ending_recommendation: { should_end: false, reason: '' },
+    };
+    session.optionBuffer = definition.opening.options.join('\n');
+    session.storyOpeningCache = { raw: JSON.stringify(openingParsed), parsed: openingParsed, timestamp: new Date().toISOString() };
+    session.characterInitialStats = this._captureInitialStats(session);
+    session.chatRecord.push({
+      role: ChatRole.KP,
+      type: ChatEntryType.NARRATION,
+      content: `${definition.opening.narration}\n\n【请选择你接下来的行动】\n${definition.opening.options.join('\n')}`,
+      parsed: openingParsed,
+      flowType: FlowType.STORY_OPENING,
+      timestamp: new Date().toISOString(),
+    });
+    this._pushDisplay(session, 'system', '【新手试炼已开始】00:10 · 距离发车 5小时50分 · 调查会随行动推进。');
+    this._pushDisplay(session, 'kp', textRefiner.refine(FlowType.STORY_OPENING, openingParsed).html);
+    this.repository.save(session);
+    return { session: session.toClientJSON() };
   }
 
   getSession(id) {
@@ -567,6 +615,10 @@ export class GameOrchestrator {
         };
       }
 
+      if (result.scenarioDeadlineReached || result.endingRecommended) {
+        return await this._triggerEnding(session, null, onDebug, null, result.endingReason);
+      }
+
       if (session.phase === Phase.STORY_PLAY && session.chatRecord.length > 0) {
         await this.historySummarizer.checkAndRun(session);
       }
@@ -632,7 +684,46 @@ export class GameOrchestrator {
       result = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug, flowType);
     }
 
+    if (flowType === FlowType.NARRATION_I && result.branch === 'NARRATIVE') {
+      const scenarioResult = this._applyScenarioRuling(session, result.parsed);
+      Object.assign(result, scenarioResult);
+    }
+
     return result;
+  }
+
+  _applyScenarioRuling(session, parsed) {
+    if (!session.scenarioId) return {};
+    const stateResult = scheduleService.applyStateRuling(session, parsed);
+    const clockResult = scheduleService.applyNarrativeRuling(session, parsed);
+    if (!clockResult.advanced) return {};
+    const rationale = parsed?.time_cost_rationale || '本次行动推进了调查。';
+    const timeMessage = `【第${session.scenarioClock.turn}回合 · 耗时 ${clockResult.cost} 分钟 · 当前 ${clockResult.currentTime} · 距发车 ${Math.floor((360 - (Number(clockResult.currentTime.slice(0, 2)) * 60 + Number(clockResult.currentTime.slice(3)))) / 60)}小时${(360 - (Number(clockResult.currentTime.slice(0, 2)) * 60 + Number(clockResult.currentTime.slice(3)))) % 60}分】${rationale}`;
+    const scenarioMessages = [timeMessage];
+    this._pushDisplay(session, 'system', timeMessage);
+    session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: timeMessage, timestamp: new Date().toISOString() });
+    if (stateResult.crossedSuspicionState) {
+      const suspicionMessage = `【怀疑度：${session.suspicion}/10 · ${stateResult.suspicionState.label}】${stateResult.suspicionState.effect}`;
+      scenarioMessages.push(suspicionMessage);
+      this._pushDisplay(session, 'system', suspicionMessage);
+      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: suspicionMessage, timestamp: new Date().toISOString() });
+    }
+    for (const event of clockResult.firedEvents) {
+      const message = `【${event.at} 事件】${event.text}`;
+      scenarioMessages.push(message);
+      this._pushDisplay(session, 'system', message);
+      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: message, timestamp: new Date().toISOString() });
+    }
+    const recommendation = parsed?.ending_recommendation;
+    const truthProgress = scenarioProgressService.evaluateTruth(session);
+    const endingRecommended = Boolean(recommendation?.should_end) && scenarioProgressService.canAcceptRecommendedEnding(session);
+    return {
+      scenarioDeadlineReached: clockResult.deadlineReached,
+      endingRecommended,
+      endingReason: endingRecommended ? recommendation.reason : (clockResult.deadlineReached ? 'deadline' : null),
+      scenarioMessages,
+      truthProgress,
+    };
   }
 
   /**
@@ -1056,6 +1147,13 @@ export class GameOrchestrator {
       entityUpdater.applyNarrative(session, pendingParsed, pendingRaw, sourceFlowType, { skipChatRecord: true });
     }
 
+    const scenarioResult = this._applyScenarioRuling(session, pendingParsed);
+    if (scenarioResult.scenarioDeadlineReached || scenarioResult.endingRecommended) {
+      const endingResult = await this._triggerEnding(session, null, onDebug, onSystemMessage, scenarioResult.endingReason);
+      endingResult.scenarioMessages = scenarioResult.scenarioMessages;
+      return endingResult;
+    }
+
     // 调用 DamageResolver 处理 actions 数组（掷骰 + HP/SAN 计算 + 系统消息生成）
     const damageResult = damageResolver.resolve(session, { actions });
 
@@ -1135,6 +1233,7 @@ export class GameOrchestrator {
       // NARRATION_II 返回 ACTIONS 时，同样需要保存该轮次的 reasoning_content
       const diceCheck = await this._handleDiceBranch(session, result, reasoningContent, debugLogs, onDebug, FlowType.NARRATION_II);
       if (diceCheck.branch === 'DICE_AWAITING') {
+        diceCheck.scenarioMessages = scenarioResult.scenarioMessages;
         return diceCheck;
       }
       result = diceCheck;
@@ -1149,6 +1248,7 @@ export class GameOrchestrator {
     session.subState = SubState.AWAITING_INPUT;
     this.repository.save(session);
 
+    result.scenarioMessages = scenarioResult.scenarioMessages;
     return result;
   }
 
@@ -1159,12 +1259,14 @@ export class GameOrchestrator {
    * 3. 调用 ENDING_GEN flow 生成结局文本
    * 4. 设置 RESTART_PENDING 状态
    */
-  async _triggerEnding(session, damageResult, onDebug, onSystemMessage) {
+  async _triggerEnding(session, damageResult, onDebug, onSystemMessage, explicitReason = null) {
     const debugLogs = [];
 
     // 1. 推送结局触发消息
     const player = session.npcs.find(n => n.id === 'npc_000');
-    const triggerMsg = endingService.buildEndingTriggerMessage(player);
+    const triggerMsg = explicitReason
+      ? `【故事进入结局判定：${explicitReason === 'deadline' ? '06:00已到，雾港号即将恢复通行' : explicitReason}】`
+      : endingService.buildEndingTriggerMessage(player);
     this._pushDisplay(session, 'system', triggerMsg);
     if (onSystemMessage) {
       try { onSystemMessage(triggerMsg); } catch {}
@@ -1178,6 +1280,13 @@ export class GameOrchestrator {
 
     // 2. 设置 ENDING_PENDING 状态
     session.subState = SubState.ENDING_PENDING;
+    session.endingState = {
+      reason: explicitReason || endingService.getEndingType(player),
+      endingType: scenarioProgressService.chooseEndingType(session, explicitReason),
+      playerChoice: null,
+      evidenceSummary: (session.evidence || []).filter(e => e.secured).map(e => e.id),
+      truthProgress: scenarioProgressService.evaluateTruth(session),
+    };
     this.repository.save(session);
 
     // 3. 调用 ENDING_GEN flow
@@ -1189,10 +1298,16 @@ export class GameOrchestrator {
     // 处理结局文本（解析 LLM 输出）
     const endingParsed = jsonOutputParser.parse(raw);
     const endingText = endingParsed?.ending_text || '故事到此结束。';
-    const endingType = endingParsed?.ending_type || 'death';
+    const endingType = session.endingState.endingType || endingParsed?.ending_type || (explicitReason ? 'withdrawal' : 'death');
+    session.endingState.playerChoice = endingParsed?.player_choice || null;
 
     // 使用 TextRefiner 渲染结局文本（统一 escape/markdown/<br> 处理）
     this._pushDisplay(session, 'kp', refinedHtml);
+    if (endingParsed?.debrief) {
+      const debrief = endingParsed.debrief;
+      const debriefText = `【主持人复盘（含剧透）】\n隐藏真相：${debrief.hidden_plot || '—'}\n重要事件：${(debrief.important_events || []).join('；') || '—'}\n实际使用的证据：${(debrief.evidence_used || []).join('；') || '—'}\n错过线索：${(debrief.missed_leads || []).join('；') || '—'}\n下次可尝试：${debrief.next_try || '—'}`;
+      this._pushDisplay(session, 'system', debriefText);
+    }
     const endingEntry = {
       role: ChatRole.KP,
       type: ChatEntryType.NARRATION,
@@ -1221,6 +1336,8 @@ export class GameOrchestrator {
    */
   restartStory(sessionId) {
     const session = this.getSession(sessionId);
+    // 预设试炼的“再试一次”始终创建新会话，避免覆盖当前结局或自由剧本存档。
+    if (session.scenarioId) return this.createBirchStationTutorial();
     endingService.restartStory(session);
 
     // 推送 displayLog（EndingService 只写 chatRecord，displayLog 由 orchestrator 统一管理）
