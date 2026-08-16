@@ -55,6 +55,7 @@ const STORY_OPENING_INSTRUCTION = `${SYSTEM_PREFIX}
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场时填写数值，已存在的 npc 填 null（由系统管理）
+- current_location_id：普通剧本固定填空字符串
 - actions：固定填null
 - ${OPTIONS_RULE}
 
@@ -70,6 +71,7 @@ const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场npc填写数值，已存在的 npc 填 null（由系统管理）
+- current_location_id：本轮结束时玩家所在地点。新手试炼只能填写设定上下文中已发现的地点 id；未移动时保持当前地点 id。普通剧本填空字符串。
 - actions与options互斥：
   - actions非空=触发判定（options填null），narration在判定点自然切断
   - actions为null=正常推进，${OPTIONS_RULE}
@@ -84,10 +86,10 @@ on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级�
 
 ${buildEntityReferenceRules(false)}
 
-For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity: unease, major, or catastrophe. Use unease for minor anomalies, major for core revelations, and catastrophe only for direct supernatural contact or the climax. Never invent evidence IDs: only update clues supplied in the scenario context. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
+For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity and san_event_id. For an authored scenario, only use a currently allowed SAN event ID from the scenario context: the server overrides the submitted severity and target, and rejects invented/repeated/early/wrong-location events. Never invent evidence IDs: only update clues supplied in the scenario context. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
 
 const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
-For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity (unease, major, or catastrophe) on every sancheck. Only catalogued evidence IDs may be updated.
+For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity plus a currently allowed san_event_id on every sancheck. Only catalogued evidence IDs may be updated.
 任务：根据系统判定结果推进剧情。系统已完成掷骰和HP/SAN计算，直接承接推进，不重复输出判定格式。
 
 字段：
@@ -96,6 +98,7 @@ For an authored scenario, use a minimum 10-minute meaningful turn and include sa
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场时填写数值，已存在的 npc 填 null（由系统管理）
+- current_location_id：本轮结束时玩家所在地点；新手试炼只能填写已发现地点 id，未移动时保持当前地点 id。
 - actions与options互斥：
   - actions非空=递归检定（options填null）
   - actions为null=正常推进，${OPTIONS_RULE}

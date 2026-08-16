@@ -28,7 +28,10 @@ export class ScheduleService {
     const obstructionCost = suspicionState.id === 'watched' ? 5
       : suspicionState.id === 'obstructed' ? 10
         : suspicionState.id === 'crisis' ? 15 : 0;
-    const cost = Math.max(minimum, Math.min(maximum, baseCost)) + obstructionCost;
+    const activeTrauma = session.sanity?.activeTrauma;
+    const traumaCost = Math.max(0, Math.min(15, Number(activeTrauma?.pendingTimePenaltyMinutes) || 0));
+    if (traumaCost > 0 || activeTrauma?.expiresAfterNarrativeTurn) session.sanity.activeTrauma = null;
+    const cost = Math.max(minimum, Math.min(maximum, baseCost)) + obstructionCost + traumaCost;
     const current = Math.min(deadline, previous + cost);
     session.scenarioClock.currentTime = formatMinutes(current);
     session.scenarioClock.turn = (session.scenarioClock.turn || 0) + 1;
@@ -44,14 +47,20 @@ export class ScheduleService {
     }
     const phase = [...(session.scheduledEvents || [])].reverse().find(event => event.fired)?.phase;
     if (phase) session.scenarioClock.phase = phase;
+    const revealedLocations = scenarioProgressService.revealLocations(
+      session,
+      firedEvents.flatMap(event => event.revealsLocations || [])
+    );
     return {
       advanced: true,
       cost,
       currentTime: session.scenarioClock.currentTime,
       deadlineReached: current >= deadline,
       firedEvents,
+      revealedLocations,
       suspicionState,
       obstructionCost,
+      traumaCost,
     };
   }
 
@@ -65,11 +74,13 @@ export class ScheduleService {
     if (parsed.combat_update && typeof parsed.combat_update === 'object') session.combat = parsed.combat_update;
 
     const evidenceChanges = scenarioProgressService.applyEvidenceChanges(session, parsed.evidence_changes || []);
+    const locationChanged = scenarioProgressService.updatePlayerLocation(session, parsed.current_location_id);
     const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
     return {
       evidenceChanges,
       suspicionState,
       crossedSuspicionState: previousState.id !== suspicionState.id ? suspicionState : null,
+      locationChanged,
     };
   }
 }

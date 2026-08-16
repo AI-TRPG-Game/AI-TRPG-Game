@@ -88,6 +88,8 @@ export class GameOrchestrator {
     session.scenarioId = definition.id;
     session.scenarioRules = structuredClone(definition.scenarioRules);
     session.scenarioClock = { currentTime: '00:10', deadline: '06:00', turn: 0, phase: 'hook' };
+    session.playerLocationId = definition.scenarioRules.initialLocationId;
+    session.sanity = { startSan: 60, state: 'stable', resolvedEventIds: [], traumaHistory: [], activeTrauma: null };
     session.scheduledEvents = structuredClone(definition.scheduledEvents);
     session.worldSettings = definition.worldSettings;
     session.player = definition.player;
@@ -106,6 +108,7 @@ export class GameOrchestrator {
       suspicion_delta: 0,
       combat_update: null,
       ending_recommendation: { should_end: false, reason: '' },
+      current_location_id: definition.scenarioRules.initialLocationId,
     };
     session.optionBuffer = definition.opening.options.join('\n');
     session.storyOpeningCache = { raw: JSON.stringify(openingParsed), parsed: openingParsed, timestamp: new Date().toISOString() };
@@ -708,11 +711,23 @@ export class GameOrchestrator {
       this._pushDisplay(session, 'system', suspicionMessage);
       session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: suspicionMessage, timestamp: new Date().toISOString() });
     }
+    if (stateResult.locationChanged) {
+      const locationMessage = `【移动】你现在位于：${stateResult.locationChanged.name}。`;
+      scenarioMessages.push(locationMessage);
+      this._pushDisplay(session, 'system', locationMessage);
+      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: locationMessage, timestamp: new Date().toISOString() });
+    }
     for (const event of clockResult.firedEvents) {
       const message = `【${event.at} 事件】${event.text}`;
       scenarioMessages.push(message);
       this._pushDisplay(session, 'system', message);
       session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: message, timestamp: new Date().toISOString() });
+    }
+    for (const location of clockResult.revealedLocations) {
+      const locationMessage = `【新地点已发现】${location.name}已加入地点列表。`;
+      scenarioMessages.push(locationMessage);
+      this._pushDisplay(session, 'system', locationMessage);
+      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: locationMessage, timestamp: new Date().toISOString() });
     }
     const recommendation = parsed?.ending_recommendation;
     const truthProgress = scenarioProgressService.evaluateTruth(session);

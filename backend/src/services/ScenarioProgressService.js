@@ -6,12 +6,18 @@ const SUSPICION_STATES = [
 ];
 
 const SAN_STATES = [
-  { min: 50, id: 'stable', label: 'stable', penaltyDice: 0 },
-  { min: 41, id: 'uneasy', label: 'uneasy', penaltyDice: 0 },
-  { min: 21, id: 'shaken', label: 'shaken', penaltyDice: 1 },
-  { min: 1, id: 'unstable', label: 'unstable', penaltyDice: 2 },
+  { min: 51, id: 'stable', label: 'stable', penaltyDice: 0 },
+  { min: 46, id: 'uneasy', label: 'uneasy', penaltyDice: 0 },
+  { min: 31, id: 'shaken', label: 'shaken', penaltyDice: 1 },
+  { min: 16, id: 'unstable', label: 'unstable', penaltyDice: 2 },
+  { min: 1, id: 'critical', label: 'critical', penaltyDice: 2 },
   { min: 0, id: 'madness', label: 'madness', penaltyDice: 2 },
 ];
+
+function toMinutes(value) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value || '');
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
 
 export class ScenarioProgressService {
   getSuspicionState(value = 0) {
@@ -27,6 +33,68 @@ export class ScenarioProgressService {
   getPlayerSanState(session) {
     const player = session.npcs?.find(npc => npc.id === 'npc_000');
     return this.getSanState(player?.san ?? 0);
+  }
+
+  refreshSanity(session) {
+    const player = session.npcs?.find(npc => npc.id === 'npc_000');
+    const previousState = session.sanity?.state ?? this.getSanState(player?.san ?? 0).id;
+    const currentState = this.getSanState(player?.san ?? 0);
+    session.sanity = {
+      startSan: session.sanity?.startSan ?? player?.maxSan ?? player?.san ?? 0,
+      state: currentState.id,
+      resolvedEventIds: Array.isArray(session.sanity?.resolvedEventIds) ? session.sanity.resolvedEventIds : [],
+      traumaHistory: Array.isArray(session.sanity?.traumaHistory) ? session.sanity.traumaHistory : [],
+      activeTrauma: session.sanity?.activeTrauma ?? null,
+    };
+    return { previousState, currentState };
+  }
+
+  getAvailableSanEvents(session) {
+    const events = session.scenarioRules?.sanEvents;
+    if (!events || typeof events !== 'object') return [];
+    const current = toMinutes(session.scenarioClock?.currentTime);
+    const resolved = new Set(session.sanity?.resolvedEventIds || []);
+    return Object.entries(events)
+      .filter(([id, event]) => !resolved.has(id)
+        && (toMinutes(event.at) ?? Infinity) <= (current ?? -1)
+        && (!event.locationId || event.locationId === session.playerLocationId))
+      .map(([id, event]) => ({ id, ...event }));
+  }
+
+  revealLocations(session, locationIds = []) {
+    const catalog = session.scenarioRules?.locationCatalog;
+    if (!catalog || !Array.isArray(locationIds)) return [];
+    if (!Array.isArray(session.locations)) session.locations = [];
+    const revealed = [];
+    for (const id of locationIds) {
+      const definition = catalog[id];
+      if (!definition || session.locations.some(location => location.id === id)) continue;
+      const location = {
+        id,
+        name: definition.name,
+        description: definition.description,
+        firstSeenAt: session.scenarioClock?.turn ?? 0,
+        lastUpdatedAt: session.scenarioClock?.turn ?? 0,
+      };
+      session.locations.push(location);
+      revealed.push(location);
+    }
+    return revealed;
+  }
+
+  updatePlayerLocation(session, locationId) {
+    if (!session.scenarioId || typeof locationId !== 'string' || !locationId) return null;
+    const location = (session.locations || []).find(entry => entry.id === locationId);
+    if (!location || session.playerLocationId === locationId) return null;
+    session.playerLocationId = locationId;
+    return location;
+  }
+
+  recordSanEvent(session, eventId) {
+    this.refreshSanity(session);
+    if (!session.sanity.resolvedEventIds.includes(eventId)) {
+      session.sanity.resolvedEventIds.push(eventId);
+    }
   }
 
   applyEvidenceChanges(session, changes = []) {

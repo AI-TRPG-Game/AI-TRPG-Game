@@ -48,6 +48,7 @@ export const ACTION_TYPE = 'type';
 export const SKILL_CHECK = 'skill_check';
 export const SANCHECK = 'sancheck';
 export const SAN_SEVERITY = 'san_severity';
+export const SAN_EVENT_ID = 'san_event_id';
 export const DIRECT = 'direct';
 export const ON_SUCCESS = 'on_success';
 export const ON_FAIL = 'on_fail';
@@ -90,6 +91,7 @@ export const EVIDENCE_CHANGES = 'evidence_changes';
 export const SUSPICION_DELTA = 'suspicion_delta';
 export const COMBAT_UPDATE = 'combat_update';
 export const ENDING_RECOMMENDATION = 'ending_recommendation';
+export const CURRENT_LOCATION_ID = 'current_location_id';
 
 // ── Prompt 文本片段 ──
 

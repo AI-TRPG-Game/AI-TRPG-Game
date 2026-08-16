@@ -7,6 +7,7 @@ import { GameSession } from '../src/domain/GameSession.js';
 import { buildNarrationStrictSchema } from '../src/domain/StrictSchemaRegistry.js';
 import { getDatabase } from '../src/persistence/database.js';
 import { SessionRepository } from '../src/persistence/SessionRepository.js';
+import { BIRCH_STATION_ID } from '../src/scenarios/birchStation.js';
 
 const raw = `<narration>夜幕降临</narration>
 <location>码头区：咸腥的海风</location>
@@ -88,5 +89,15 @@ console.assert(
   narrationSchema.required.length === Object.keys(narrationSchema.properties).length,
   'strict narration schema requires every declared property'
 );
+
+const migratedBirchSession = new GameSession({
+  id: 'old-birch',
+  scenarioId: BIRCH_STATION_ID,
+  scenarioRules: { time: { minimumMinutes: 10, maximumMinutes: 60 } },
+  scheduledEvents: [{ id: 'broadcast_0040', at: '00:40', fired: true }],
+  locations: [{ id: 'loc_001', name: '头等包厢外', description: '' }],
+});
+console.assert(migratedBirchSession.playerLocationId === 'loc_001', 'legacy Birch session gains initial player location');
+console.assert(migratedBirchSession.locations.some(location => location.id === 'loc_003'), 'legacy Birch session reveals locations for events that already fired');
 
 console.log('All tests passed');

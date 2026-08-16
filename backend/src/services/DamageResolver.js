@@ -1,6 +1,7 @@
 import { diceService } from './DiceService.js';
+import { scenarioProgressService } from './ScenarioProgressService.js';
 import {
-  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, DIRECT,
+  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, SAN_EVENT_ID, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
   TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
@@ -86,16 +87,24 @@ export class DamageResolver {
     if (!session.scenarioId) return 0;
     const player = this._findNpc(session, 'player');
     if (!player || player.san == null) return 0;
-    if (player.san <= 20) return 2;
-    if (player.san <= 40) return 1;
-    return 0;
+    return scenarioProgressService.getSanState(player.san).penaltyDice;
+  }
+
+  _consumeTraumaSkillPenalty(session) {
+    const trauma = session.sanity?.activeTrauma;
+    const penaltyDice = Math.max(0, Math.min(2, Number(trauma?.pendingSkillPenaltyDice) || 0));
+    if (penaltyDice > 0) {
+      session.sanity.activeTrauma = null;
+    }
+    return penaltyDice;
   }
 
   _processPlayerSkillCheck(session, action, departedNpcs) {
     const skillName = action.skill_name;
     const skillPoint = action.skill_point;
     const bonusDice = action[BONUS_DICE] || 0;
-    const penaltyDice = Math.min(2, (action[PENALTY_DICE] || 0) + this._sanPenaltyDice(session));
+    const traumaPenaltyDice = this._consumeTraumaSkillPenalty(session);
+    const penaltyDice = Math.min(2, (action[PENALTY_DICE] || 0) + this._sanPenaltyDice(session) + traumaPenaltyDice);
     const onSuccess = action[ON_SUCCESS] || [];
     const onFail = action[ON_FAIL] || [];
     const onCriticalSuccess = action[ON_CRITICAL_SUCCESS] || [];
@@ -109,6 +118,9 @@ export class DamageResolver {
     const penaltyDesc = penaltyDice > 0 ? `，惩罚骰${penaltyDice}` : '';
     const mainMsg = `【${skillName}技能投掷结果${roll.value}${bonusDesc}${penaltyDesc}，最终结果${roll.value}，${level}】`;
     const messages = [mainMsg];
+    if (traumaPenaltyDice > 0) {
+      messages.push(`【急性创伤：本次检定额外承受${traumaPenaltyDice}枚惩罚骰】`);
+    }
 
     // 根据等级选择 changeItem
     let changes = [];
@@ -180,7 +192,10 @@ export class DamageResolver {
    *          NPC："target 直视了不可直视之物，san -n"
    */
   _processSancheck(session, action, departedNpcs) {
-    const targetId = action[TARGET];
+    const eventResolution = this._resolveSanEvent(session, action);
+    if (eventResolution.error) return [`【SAN 检定未执行：${eventResolution.error}】`];
+
+    const targetId = eventResolution.targetId ?? action[TARGET];
     const target = this._findNpc(session, targetId);
     if (!target) {
       return [`【SAN 检定失败：未找到目标 ${targetId}】`];
@@ -190,16 +205,19 @@ export class DamageResolver {
     const roll = diceService.rollWithBonusPenalty(0, 0);
     const isSuccess = roll.value <= sanValue;
 
-    const severity = action[SAN_SEVERITY] || 'major';
+    const severity = eventResolution.severity ?? (action[SAN_SEVERITY] || 'major');
     const formulas = {
-      unease: { success: '1d2', failure: '1d4' },
-      major: { success: '1d4', failure: '1d8' },
-      catastrophe: { success: '1d6', failure: '2d6' },
+      unease: { success: '1d3', failure: '1d5' },
+      major: { success: '1d4+1', failure: '1d8+2' },
+      catastrophe: { success: '1d6+2', failure: '2d6+3' },
     };
     const damageFormula = (formulas[severity] || formulas.major)[isSuccess ? 'success' : 'failure'];
     const damage = diceService.rollFormula(damageFormula);
 
     const oldSan = target.san;
+    const previousState = target.id === 'npc_000'
+      ? scenarioProgressService.getSanState(oldSan)
+      : null;
     const maxSan = target.maxSan ?? 99;
     target.san = Math.max(0, Math.min(maxSan, target.san - damage));
     const actualDamage = oldSan - target.san;
@@ -208,11 +226,72 @@ export class DamageResolver {
     const targetName = this._getTargetName(target);
     const isPlayer = target.id === 'npc_000';
     const subject = isPlayer ? '你' : targetName;
-    const msg = `【${subject} 直视了不可直视之物，san -${actualDamage}】`;
+    const msg = `【${subject} 直视了不可直视之物，SAN -${actualDamage}（${target.san}/${maxSan}）】`;
 
     this._checkDeparted(target, departedNpcs);
+    if (eventResolution.eventId) scenarioProgressService.recordSanEvent(session, eventResolution.eventId);
 
-    return [`${msg} [SAN severity: ${severity}]`];
+    const messages = [`${msg} [SAN severity: ${severity}]`];
+    if (eventResolution.event?.label) {
+      messages.push(`【SAN事件：${eventResolution.event.label}】`);
+    }
+    if (target.id === 'npc_000') {
+      const { currentState } = scenarioProgressService.refreshSanity(session);
+      if (previousState?.id !== currentState.id) {
+        messages.push(`【SAN状态变化：${previousState.label} → ${currentState.label}；后续主动检定惩罚骰${currentState.penaltyDice}】`);
+      }
+      messages.push(...this._applyAcuteTrauma(session, actualDamage));
+    }
+    return messages;
+  }
+
+  _resolveSanEvent(session, action) {
+    const events = session.scenarioRules?.sanEvents;
+    if (!events || typeof events !== 'object') return {};
+
+    const eventId = action[SAN_EVENT_ID];
+    const event = events[eventId];
+    if (!event) return { error: `未知的剧本 SAN 事件 ${eventId || '(缺失)'}` };
+    if ((session.sanity?.resolvedEventIds || []).includes(eventId)) {
+      return { error: `SAN 事件 ${eventId} 已处理` };
+    }
+    const available = scenarioProgressService.getAvailableSanEvents(session)
+      .some(candidate => candidate.id === eventId);
+    if (!available) return { error: `SAN 事件 ${eventId} 尚未到达可触发时间` };
+    return {
+      eventId,
+      event,
+      severity: event.severity,
+      targetId: event.target || action[TARGET],
+    };
+  }
+
+  _applyAcuteTrauma(session, sanLoss) {
+    // 参照 CoC 的单次重度 SAN 损失：立即出现一次短期创伤，避免 SAN 只成为结局数值。
+    if (sanLoss < 5) return [];
+    scenarioProgressService.refreshSanity(session);
+    const traumaRoll = diceService.rollDie(3);
+    let trauma;
+    if (traumaRoll === 1) {
+      trauma = {
+        id: 'freeze', label: '僵立失神', pendingTimePenaltyMinutes: 10,
+        message: '你短暂僵在原地；下一次行动额外消耗10分钟。',
+      };
+    } else if (traumaRoll === 2) {
+      trauma = {
+        id: 'panic', label: '失控惊叫', immediateSuspicionDelta: 1, expiresAfterNarrativeTurn: true,
+        message: '你的惊叫惊动了车厢；怀疑度立刻+1。',
+      };
+      session.suspicion = Math.max(0, Math.min(10, (Number(session.suspicion) || 0) + 1));
+    } else {
+      trauma = {
+        id: 'tunnel_vision', label: '隧道视野', pendingSkillPenaltyDice: 1,
+        message: '视野被恐惧收窄；下一次主动检定额外承受1枚惩罚骰。',
+      };
+    }
+    session.sanity.activeTrauma = trauma;
+    session.sanity.traumaHistory.push({ id: trauma.id, at: session.scenarioClock?.currentTime ?? null, sanLoss });
+    return [`【急性创伤：${trauma.label}——${trauma.message}】`];
   }
 
   /**

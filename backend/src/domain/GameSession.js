@@ -1,4 +1,5 @@
 import { Phase, SubState } from './enums.js';
+import { BIRCH_STATION_ID, BIRCH_STATION_TUTORIAL } from '../scenarios/birchStation.js';
 
 const RECOVERABLE_SUB_STATES = new Set([
   SubState.LLM_STREAMING,
@@ -36,6 +37,8 @@ export class GameSession {
     this.scenarioId = data.scenarioId ?? null;
     this.scenarioRules = data.scenarioRules ?? null;
     this.scenarioClock = data.scenarioClock ?? null;
+    this.playerLocationId = data.playerLocationId ?? null;
+    this.sanity = data.sanity ?? null;
     this.scheduledEvents = Array.isArray(data.scheduledEvents) ? data.scheduledEvents : [];
     this.evidence = Array.isArray(data.evidence) ? data.evidence : [];
     this.suspicion = Number.isFinite(data.suspicion) ? data.suspicion : 0;
@@ -112,6 +115,11 @@ export class GameSession {
       this.scenarioClock.turn = 0;
     }
     this.suspicion = Math.max(0, Math.min(10, Number(this.suspicion) || 0));
+    if (this.sanity && typeof this.sanity !== 'object') this.sanity = null;
+    if (!this.playerLocationId && this.scenarioRules?.initialLocationId) {
+      this.playerLocationId = this.scenarioRules.initialLocationId;
+    }
+    this._migrateBirchStationLocations();
 
     // 4. 迁移 pendingDiceFlow（新增 dialogStage / hasS 字段）
     if (this.pendingDiceFlow) {
@@ -132,6 +140,42 @@ export class GameSession {
         }
       }
     }
+  }
+
+  _migrateBirchStationLocations() {
+    if (this.scenarioId !== BIRCH_STATION_ID) return;
+    const authoredRules = BIRCH_STATION_TUTORIAL.scenarioRules;
+    const oldRules = this.scenarioRules || {};
+    const oldSanEvents = oldRules.sanEvents || {};
+    this.scenarioRules = {
+      ...authoredRules,
+      ...oldRules,
+      initialLocationId: oldRules.initialLocationId || authoredRules.initialLocationId,
+      locationCatalog: oldRules.locationCatalog || authoredRules.locationCatalog,
+      sanEvents: Object.fromEntries(Object.entries(authoredRules.sanEvents).map(([id, event]) => [
+        id,
+        { ...event, ...(oldSanEvents[id] || {}) },
+      ])),
+    };
+
+    const scheduledById = new Map(BIRCH_STATION_TUTORIAL.scheduledEvents.map(event => [event.id, event]));
+    this.scheduledEvents = (this.scheduledEvents || []).map(event => {
+      const authored = scheduledById.get(event.id);
+      return authored
+        ? { ...authored, ...event, revealsLocations: event.revealsLocations ?? authored.revealsLocations ?? [] }
+        : event;
+    });
+
+    if (!Array.isArray(this.locations)) this.locations = [];
+    for (const event of this.scheduledEvents.filter(event => event.fired)) {
+      for (const locationId of event.revealsLocations || []) {
+        const location = this.scenarioRules.locationCatalog[locationId];
+        if (location && !this.locations.some(entry => entry.id === locationId)) {
+          this.locations.push({ id: locationId, ...location, firstSeenAt: 0, lastUpdatedAt: 0 });
+        }
+      }
+    }
+    if (!this.playerLocationId) this.playerLocationId = this.scenarioRules.initialLocationId;
   }
 
   isOpeningDone() {
@@ -201,6 +245,8 @@ export class GameSession {
       scenarioId: this.scenarioId,
       scenarioRules: this.scenarioRules,
       scenarioClock: this.scenarioClock,
+      playerLocationId: this.playerLocationId,
+      sanity: this.sanity,
       scheduledEvents: this.scheduledEvents,
       evidence: this.evidence,
       suspicion: this.suspicion,

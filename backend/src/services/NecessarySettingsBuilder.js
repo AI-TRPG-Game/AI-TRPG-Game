@@ -75,6 +75,14 @@ export class NecessarySettingsBuilder {
       const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
       const truthProgress = scenarioProgressService.evaluateTruth(session);
       lines.push(`SAN state: ${sanState.label}. Suspicion state: ${suspicionState.label} (${suspicionState.effect})`);
+      const currentLocation = (session.locations || []).find(location => location.id === session.playerLocationId);
+      lines.push(`Current player location: ${currentLocation ? `${currentLocation.id} (${currentLocation.name})` : 'unknown'}. Set current_location_id to a discovered location only when the player actually moves there.`);
+      const activeTrauma = session.sanity?.activeTrauma;
+      if (activeTrauma) lines.push(`Active acute trauma: ${activeTrauma.label}. ${activeTrauma.message}`);
+      const availableSanEvents = scenarioProgressService.getAvailableSanEvents(session);
+      if (session.scenarioRules?.sanEvents) {
+        lines.push(`Allowed SAN event IDs now (only trigger when narratively earned; target is fixed by the server): ${availableSanEvents.length ? availableSanEvents.map(event => `${event.id} [${event.severity}]`).join(', ') : 'none'}.`);
+      }
       lines.push(`Truth progress: ${truthProgress.factCount}/${truthProgress.totalFacts} proven facts; known=${truthProgress.truthKnown}; provable=${truthProgress.truthProvable}.`);
       if (session.scenarioRules?.clueCatalog) {
         lines.push(`Allowed evidence IDs (do not reveal or award one without narrative support): ${Object.keys(session.scenarioRules.clueCatalog).join(', ')}.`);

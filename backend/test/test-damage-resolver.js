@@ -1,4 +1,5 @@
 import { DamageResolver } from '../src/services/DamageResolver.js';
+import { diceService } from '../src/services/DiceService.js';
 
 let passed = 0, failed = 0;
 function assert(cond, msg) {
@@ -27,10 +28,10 @@ function makeNpc(id, hp, maxHp, san, maxSan, opts = {}) {
 
 const resolver = new DamageResolver();
 
-assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 40, 60, { importance: 'player' })] }) === 1,
-  'SAN 40 should apply one penalty die to player skill checks');
-assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 20, 60, { importance: 'player' })] }) === 2,
-  'SAN 20 should apply two penalty dice to player skill checks');
+assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 45, 60, { importance: 'player' })] }) === 1,
+  'SAN 45 should apply one penalty die to player skill checks');
+assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_000', 10, 10, 30, 60, { importance: 'player' })] }) === 2,
+  'SAN 30 should apply two penalty dice to player skill checks');
 
 // === 场景A：纯技能检定（无 HP/SAN 变化） ===
 {
@@ -185,6 +186,49 @@ assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_00
   const result = resolver.resolve(session, parsed);
   assert(session.npcs[0].san < 70, `玩家 SAN 应减少，实际=${session.npcs[0].san}`);
   assert(session.npcs[1].san < 55, `同伴 SAN 应减少，实际=${session.npcs[1].san}`);
+}
+
+// === 场景E3：剧本 SAN 事件强制使用作者定义的严重度与目标 ===
+{
+  const session = makeSession([
+    makeNpc('npc_000', 10, 10, 60, 60, {importance:'player', name:'玩家'}),
+    makeNpc('npc_001', 10, 10, 55, 55, {importance:'key', name:'同伴'}),
+  ]);
+  session.scenarioId = 'authored';
+  session.scenarioClock = { currentTime: '01:10' };
+  session.scenarioRules = { sanEvents: {
+    recorded_horror: { at: '01:10', severity: 'major', target: 'player', label: '异常录音' },
+  } };
+  session.sanity = { state: 'stable', resolvedEventIds: [], traumaHistory: [], activeTrauma: null };
+  const result = resolver.resolve(session, { actions: [{
+    type: 'sancheck', trigger: 'others', target: 'npc_001', san_severity: 'unease', san_event_id: 'recorded_horror',
+  }] });
+  assert(session.npcs[0].san < 60 && session.npcs[1].san === 55, 'authored SAN event should target the authored player target, not the LLM target');
+  assert(session.sanity.resolvedEventIds.includes('recorded_horror'), 'authored SAN event should only resolve once and be persisted');
+  assert(result.systemMessages[0].includes('severity: major'), 'authored SAN event severity should override the LLM value');
+}
+
+// === 场景E4：单次重度 SAN 损失立刻引发创伤后果 ===
+{
+  const session = makeSession([makeNpc('npc_000', 10, 10, 60, 60, {importance:'player', name:'玩家'})]);
+  session.scenarioId = 'tutorial';
+  session.suspicion = 0;
+  const originalRoll = diceService.rollWithBonusPenalty;
+  const originalFormula = diceService.rollFormula;
+  const originalDie = diceService.rollDie;
+  try {
+    diceService.rollWithBonusPenalty = () => ({ value: 100 });
+    diceService.rollFormula = () => 5;
+    diceService.rollDie = () => 2;
+    const result = resolver.resolve(session, { actions: [{ type: 'sancheck', trigger: 'others', target: 'player', san_severity: 'major' }] });
+    assert(session.suspicion === 1, 'panic trauma should immediately add suspicion');
+    assert(session.sanity.activeTrauma?.id === 'panic', 'heavy SAN loss should persist its acute trauma');
+    assert(result.systemMessages.some(message => message.includes('急性创伤')), 'acute trauma should be visible in system messages');
+  } finally {
+    diceService.rollWithBonusPenalty = originalRoll;
+    diceService.rollFormula = originalFormula;
+    diceService.rollDie = originalDie;
+  }
 }
 
 // === HP 钳制测试 ===

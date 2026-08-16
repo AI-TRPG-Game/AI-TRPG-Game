@@ -16,12 +16,12 @@ import {
   SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION,
   ENTITY_ID, ENTITY_NAME, ENTITY_DESC, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE,
   ITEM_STATUS,
-  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, DIRECT,
+  ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, SAN_EVENT_ID, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
   TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
   ON_CRITICAL_SUCCESS, ON_CRITICAL_FAILURE,
-  ENDING_TYPE, ENDING_TEXT,
+  ENDING_TYPE, ENDING_TEXT, CURRENT_LOCATION_ID,
 } from '../domain/NarrativeSchema.js';
 import {
   CARD_KEY, NAME, AGE, GENDER, OCCUPATION, PERSONALITY, PORTRAIT,
@@ -187,6 +187,7 @@ const sancheckActionSchema = {
   type: 'object',
   properties: {
     [SAN_SEVERITY]: { type: 'string', enum: ['unease', 'major', 'catastrophe'], description: 'SAN loss tier, resolved by backend rules.' },
+    [SAN_EVENT_ID]: { type: 'string', description: "Author-authored SAN event ID. Use 'freeform' outside authored scenarios." },
     [ACTION_TYPE]: { type: 'string', enum: [SANCHECK] },
     [TRIGGER]: {
       type: 'string',
@@ -195,7 +196,7 @@ const sancheckActionSchema = {
     },
     [TARGET]: { type: 'string', description: "检定目标，填玩家/npc的id" },
   },
-  required: [ACTION_TYPE, TRIGGER, TARGET, SAN_SEVERITY],
+  required: [ACTION_TYPE, TRIGGER, TARGET, SAN_SEVERITY, SAN_EVENT_ID],
   additionalProperties: false,
 };
 
@@ -375,6 +376,7 @@ export function buildNarrationStrictSchema() {
         properties: { should_end: { type: 'boolean' }, reason: { type: 'string' } },
         required: ['should_end', 'reason'], additionalProperties: false,
       },
+      [CURRENT_LOCATION_ID]: { type: 'string', description: '玩家在本次叙事结束时所在的已发现地点 ID；未移动或普通剧本填空字符串。' },
     },
     // DeepSeek strict tools 要求 required 与 properties 完全一致；
     // 对普通剧本，新增剧本字段使用中性值而非省略。
@@ -382,6 +384,7 @@ export function buildNarrationStrictSchema() {
       NARRATION, LOCATIONS, NPCS, ITEMS, ACTIONS, OPTIONS,
       'time_cost_minutes', 'time_cost_rationale', 'evidence_changes',
       'suspicion_delta', 'combat_update', 'ending_recommendation',
+      CURRENT_LOCATION_ID,
     ],
     additionalProperties: false,
   };

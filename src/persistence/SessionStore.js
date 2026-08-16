@@ -74,6 +74,8 @@ function normalizeSession(session) {
     scenarioId: session.scenarioId ?? null,
     scenarioRules: session.scenarioRules ?? null,
     scenarioClock: session.scenarioClock ?? null,
+    playerLocationId: session.playerLocationId ?? null,
+    sanity: session.sanity ?? null,
     scheduledEvents: Array.isArray(session.scheduledEvents) ? session.scheduledEvents : [],
     evidence: Array.isArray(session.evidence) ? session.evidence : [],
     suspicion: Number.isFinite(session.suspicion) ? session.suspicion : 0,

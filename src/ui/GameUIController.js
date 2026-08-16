@@ -1079,8 +1079,12 @@ export class GameUIController {
     // 地点 —— 名称 + 编辑（按 id 引用，name 编辑后仍可定位）
     this.locationsPanel.innerHTML = (this.session.locations || [])
       .map(
-        (l, i) =>
-          `<div class="sidebar-item-row">📍 <span class="sidebar-clickable" data-detail="location" data-location-id="${escapeHtml(l.id ?? '')}" title="${escapeHtml(l.id ?? '')}">${escapeHtml(l.name)}<small class="entity-id-badge">${escapeHtml(l.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`
+        (l, i) => {
+          const isCurrent = l.id === this.session.playerLocationId;
+          const marker = isCurrent ? '📍' : '📌';
+          const currentLabel = isCurrent ? '<small style="opacity:0.75"> 你在此</small>' : '';
+          return `<div class="sidebar-item-row">${marker} <span class="sidebar-clickable" data-detail="location" data-location-id="${escapeHtml(l.id ?? '')}" title="${escapeHtml(l.id ?? '')}">${escapeHtml(l.name)}${currentLabel}<small class="entity-id-badge">${escapeHtml(l.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`;
+        }
       )
       .join('') + '<button class="sidebar-add-btn" data-add="location">+ 新增地点</button>';
 
@@ -1182,8 +1186,10 @@ export class GameUIController {
       const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
       let line = `HP ${escapeHtml(hpStr)} | SAN ${escapeHtml(sanStr)}`;
       if (npc.id === 'npc_000' && npc.san != null) {
-        const sanState = npc.san >= 50 ? 'stable' : npc.san >= 41 ? 'uneasy' : npc.san >= 21 ? 'shaken' : npc.san > 0 ? 'unstable' : 'madness';
+        const sanState = npc.san >= 51 ? 'stable' : npc.san >= 46 ? 'uneasy' : npc.san >= 31 ? 'shaken' : npc.san >= 16 ? 'unstable' : npc.san > 0 ? 'critical' : 'madness';
         line += ` | ${sanState}`;
+        const trauma = this.session?.sanity?.activeTrauma;
+        if (trauma?.label) line += ` | 创伤：${trauma.label}`;
       }
       if (npc.attributes) {
         const attrStr = Object.entries(npc.attributes)
