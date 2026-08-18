@@ -8,7 +8,7 @@
     "dev": "node src/index.js",
     "dev:watch": "node --watch src/index.js",
     "test": "node test/smoke.js",
-    "test:all": "node test/smoke.js && node test/test-dice-service.js && node test/test-damage-resolver.js && node test/test-ending-service.js && node test/test-schedule-service.js && node test/test-scenario-progress.js && node test/test-schema-required.js"
+    "test:all": "node test/smoke.js && node test/test-dice-service.js && node test/test-damage-resolver.js && node test/test-ending-service.js && node test/test-schedule-service.js && node test/test-scenario-progress.js && node test/test-option-resolver.js && node test/test-birch-onboarding.js && node test/test-provider-config.js && node test/test-schema-required.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

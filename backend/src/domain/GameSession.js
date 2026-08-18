@@ -156,6 +156,10 @@ export class GameSession {
         id,
         { ...event, ...(oldSanEvents[id] || {}) },
       ])),
+      clueCatalog: Object.fromEntries(Object.entries(authoredRules.clueCatalog).map(([id, clue]) => [
+        id,
+        { ...clue, ...(oldRules.clueCatalog?.[id] || {}) },
+      ])),
     };
 
     const scheduledById = new Map(BIRCH_STATION_TUTORIAL.scheduledEvents.map(event => [event.id, event]));
@@ -173,6 +177,16 @@ export class GameSession {
         if (location && !this.locations.some(entry => entry.id === locationId)) {
           this.locations.push({ id: locationId, ...location, firstSeenAt: 0, lastUpdatedAt: 0 });
         }
+      }
+    }
+    if (Array.isArray(this.evidence)) {
+      for (const evidence of this.evidence) {
+        if (evidence.discovered === undefined) evidence.discovered = true;
+      }
+    }
+    for (const authoredNpc of BIRCH_STATION_TUTORIAL.npcs || []) {
+      if (!this.npcs.some(npc => npc.id === authoredNpc.id)) {
+        this.npcs.push(structuredClone(authoredNpc));
       }
     }
     if (!this.playerLocationId) this.playerLocationId = this.scenarioRules.initialLocationId;

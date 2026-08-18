@@ -10,7 +10,7 @@ import { LLMProvider } from './LLMProvider.js';
  * - 非流式一次性返回（stream:false）
  * - 通过 tools 传入 strict function 定义；**思考模式下不能传 tool_choice**
  *   （官方样例仅传 tools，让模型自主调用；strict 模式 + 措辞强约束保证必调用）
- * - thinking.type 合法值为 'enabled' / 'disabled'（'adaptive' 已废弃）
+ * - thinking.type 合法值为 'enabled' / 'disabled'（'adaptive' 已废弃）；Flash 未显式配置时默认关闭
  * - reasoning_effort: 'high' / 'max'（思考强度控制，按 FlowType 分层）
  * - 输出从 message.tool_calls[0].function.arguments 解析；若无 tool_calls 则退回 content
  * - reasoning_content 在工具调用场景下必须回传（官方要求），由调用方持久化到 chatRecord
@@ -25,8 +25,14 @@ export class OpenAICompatibleProvider extends LLMProvider {
     const rawBase = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
     this.baseUrl = rawBase.endsWith('/beta') ? rawBase : `${rawBase}/beta`;
     this.model = model || 'deepseek-v4-pro';
-    // 官方文档：thinking.type 合法值为 'enabled' / 'disabled'，'adaptive' 已废弃
-    this.thinkingType = process.env.LLM_THINKING_TYPE === 'disabled' ? 'disabled' : 'enabled';
+    // 官方文档：thinking.type 合法值为 'enabled' / 'disabled'，'adaptive' 已废弃。
+    // Flash 主要用于高频叙事/摘要；未明确配置时关闭思考链，避免每回合把大部分
+    // 延迟消耗在 reasoning_content 上。需要严格推理时可在 .env 显式设为 enabled。
+    const configuredThinking = process.env.LLM_THINKING_TYPE;
+    this.thinkingTypeExplicit = configuredThinking === 'enabled' || configuredThinking === 'disabled';
+    this.thinkingType = this.thinkingTypeExplicit
+      ? configuredThinking
+      : (String(this.model).toLowerCase().includes('flash') ? 'disabled' : 'enabled');
   }
 
   /**
@@ -46,12 +52,15 @@ export class OpenAICompatibleProvider extends LLMProvider {
     const url = `${this.baseUrl}/chat/completions`;
 
     // thinking 模式：默认按全局开关（this.thinkingType）启用
-    // 当前项目重试策略已统一为"思考模式 high"，不再降级到非思考模式 + tool_choice
-    // 但仍保留 thinking=false 走非思考模式的能力（防御性冷备份，目前调用方不会用到）
-    const thinkingEnabled = thinking !== false && this.thinkingType === 'enabled';
+    // Flash 默认走非思考模式以减少延迟；显式 LLM_THINKING_TYPE=enabled 时仍可启用思考链。
+    const effectiveModel = modelOverride || this.model;
+    const effectiveThinkingType = this.thinkingTypeExplicit
+      ? this.thinkingType
+      : (String(effectiveModel).toLowerCase().includes('flash') ? 'disabled' : 'enabled');
+    const thinkingEnabled = thinking !== false && effectiveThinkingType === 'enabled';
 
     const body = {
-      model: modelOverride || this.model,
+      model: effectiveModel,
       messages,
       max_tokens: maxTokens ?? 4096,
       stream: false,                            // ← 关闭流式
@@ -168,6 +177,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
       return {
         content: fallback,
         reasoningContent,
+        thinkingEnabled,
         usage,
         toolCallId: null,
         hasToolCall: false,
@@ -184,6 +194,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
     return {
       content: toolCall.function.arguments,
       reasoningContent,
+      thinkingEnabled,
       usage,
       toolCallId: toolCall.id || null,
       hasToolCall: true,

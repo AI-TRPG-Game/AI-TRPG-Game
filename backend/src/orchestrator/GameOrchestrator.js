@@ -29,6 +29,7 @@ import {
 import { textRefiner } from '../services/TextRefiner.js';
 import { scheduleService } from '../services/ScheduleService.js';
 import { scenarioProgressService } from '../services/ScenarioProgressService.js';
+import { optionResolver } from '../services/OptionResolver.js';
 import { BIRCH_STATION_TUTORIAL } from '../scenarios/birchStation.js';
 
 function escapeHtml(s) {
@@ -121,7 +122,7 @@ export class GameOrchestrator {
       flowType: FlowType.STORY_OPENING,
       timestamp: new Date().toISOString(),
     });
-    this._pushDisplay(session, 'system', '【新手试炼已开始】00:10 · 距离发车 5小时50分 · 调查会随行动推进。');
+    this._pushDisplay(session, 'system', '【欢迎来到白桦站】现在是00:10，列车将在06:00发车。点击选项或直接描述行动；调查会消耗时间，地点与线索会随进展逐步揭示。');
     this._pushDisplay(session, 'kp', textRefiner.refine(FlowType.STORY_OPENING, openingParsed).html);
     this.repository.save(session);
     return { session: session.toClientJSON() };
@@ -562,6 +563,12 @@ export class GameOrchestrator {
     this.repository.save(session);
 
     let diceAwaiting = false;
+    const resolvedUserText = session.phase === Phase.STORY_PLAY
+      ? optionResolver.resolve(userText, session.optionBuffer)
+      : userText;
+    const modelUserText = resolvedUserText !== userText
+      ? `玩家选择：${userText}\n对应行动：${resolvedUserText}`
+      : userText;
 
     try {
       if (session.phase === Phase.STORY_PLAY) {
@@ -570,7 +577,9 @@ export class GameOrchestrator {
         session.chatRecord.push({
           role: ChatRole.PLAYER,
           type: ChatEntryType.PROMPT,
-          content: userText,
+          content: modelUserText,
+          selectedOption: resolvedUserText !== userText ? userText : null,
+          resolvedAction: resolvedUserText !== userText ? resolvedUserText : null,
           timestamp: new Date().toISOString(),
         });
       } else if (session.phase === Phase.WORLD_SETTING) {
@@ -606,7 +615,7 @@ export class GameOrchestrator {
       }
 
       const flowType = phaseManager.getFlowType(session);
-      const result = await this._runLlmFlow(session, flowType, userText, onDebug);
+      const result = await this._runLlmFlow(session, flowType, modelUserText, onDebug);
 
       // 检查是否进入掷骰确认等待
       if (result.branch === 'DICE_AWAITING') {
@@ -695,45 +704,59 @@ export class GameOrchestrator {
     return result;
   }
 
-  _applyScenarioRuling(session, parsed) {
+  _applyScenarioRuling(session, parsed, { advanceClock = true, userText = null } = {}) {
     if (!session.scenarioId) return {};
-    const stateResult = scheduleService.applyStateRuling(session, parsed);
-    const clockResult = scheduleService.applyNarrativeRuling(session, parsed);
-    if (!clockResult.advanced) return {};
-    const rationale = parsed?.time_cost_rationale || '本次行动推进了调查。';
-    const timeMessage = `【第${session.scenarioClock.turn}回合 · 耗时 ${clockResult.cost} 分钟 · 当前 ${clockResult.currentTime} · 距发车 ${Math.floor((360 - (Number(clockResult.currentTime.slice(0, 2)) * 60 + Number(clockResult.currentTime.slice(3)))) / 60)}小时${(360 - (Number(clockResult.currentTime.slice(0, 2)) * 60 + Number(clockResult.currentTime.slice(3)))) % 60}分】${rationale}`;
-    const scenarioMessages = [timeMessage];
-    this._pushDisplay(session, 'system', timeMessage);
-    session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: timeMessage, timestamp: new Date().toISOString() });
-    if (stateResult.crossedSuspicionState) {
-      const suspicionMessage = `【怀疑度：${session.suspicion}/10 · ${stateResult.suspicionState.label}】${stateResult.suspicionState.effect}`;
-      scenarioMessages.push(suspicionMessage);
-      this._pushDisplay(session, 'system', suspicionMessage);
-      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: suspicionMessage, timestamp: new Date().toISOString() });
-    }
-    if (stateResult.locationChanged) {
-      const locationMessage = `【移动】你现在位于：${stateResult.locationChanged.name}。`;
-      scenarioMessages.push(locationMessage);
-      this._pushDisplay(session, 'system', locationMessage);
-      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: locationMessage, timestamp: new Date().toISOString() });
-    }
-    for (const event of clockResult.firedEvents) {
-      const message = `【${event.at} 事件】${event.text}`;
+    const lastPlayerAction = userText ?? ([...(session.chatRecord || [])]
+      .reverse()
+      .find(entry => entry?.role === ChatRole.PLAYER)?.content || '');
+    const stateResult = scheduleService.applyStateRuling(session, parsed, { userText: lastPlayerAction });
+    const clockResult = advanceClock
+      ? scheduleService.applyNarrativeRuling(session, parsed)
+      : { advanced: false, deadlineReached: false, firedEvents: [], revealedLocations: [] };
+    const scenarioMessages = [];
+    const appendSystemMessage = (message) => {
       scenarioMessages.push(message);
       this._pushDisplay(session, 'system', message);
       session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: message, timestamp: new Date().toISOString() });
+    };
+
+    if (clockResult.advanced) {
+      const rationale = parsed?.time_cost_rationale || '本次行动推进了调查。';
+      const currentMinutes = Number(clockResult.currentTime.slice(0, 2)) * 60 + Number(clockResult.currentTime.slice(3));
+      const remainingMinutes = Math.max(0, 360 - currentMinutes);
+      const timeMessage = `【第${session.scenarioClock.turn}回合 · 耗时 ${clockResult.cost} 分钟 · 当前 ${clockResult.currentTime} · 距发车 ${Math.floor(remainingMinutes / 60)}小时${remainingMinutes % 60}分】${rationale}`;
+      appendSystemMessage(timeMessage);
     }
-    for (const location of clockResult.revealedLocations) {
+    if (stateResult.crossedSuspicionState) {
+      const suspicionMessage = `【怀疑度：${session.suspicion}/10 · ${stateResult.suspicionState.label}】${stateResult.suspicionState.effect}`;
+      appendSystemMessage(suspicionMessage);
+    }
+    for (const evidence of stateResult.evidenceChanges || []) {
+      const evidenceLabel = evidence.source || evidence.id;
+      appendSystemMessage(evidence.secured
+        ? `【证据已保全】${evidenceLabel}`
+        : `【发现线索】${evidenceLabel}（尚未保全）`);
+    }
+    if (stateResult.locationChanged) {
+      const locationMessage = `【移动】你现在位于：${stateResult.locationChanged.name}。`;
+      appendSystemMessage(locationMessage);
+    }
+    for (const event of clockResult.firedEvents || []) {
+      const message = `【${event.at} 事件】${event.text}`;
+      appendSystemMessage(message);
+    }
+    for (const location of clockResult.revealedLocations || []) {
       const locationMessage = `【新地点已发现】${location.name}已加入地点列表。`;
-      scenarioMessages.push(locationMessage);
-      this._pushDisplay(session, 'system', locationMessage);
-      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: locationMessage, timestamp: new Date().toISOString() });
+      appendSystemMessage(locationMessage);
     }
     const recommendation = parsed?.ending_recommendation;
     const truthProgress = scenarioProgressService.evaluateTruth(session);
-    const endingRecommended = Boolean(recommendation?.should_end) && scenarioProgressService.canAcceptRecommendedEnding(session);
+    const playerChoiceReady = scenarioProgressService.canAcceptRecommendedEnding(session);
+    const endingRecommended = playerChoiceReady && (
+      Boolean(recommendation?.should_end) || truthProgress.truthProvable
+    );
     return {
-      scenarioDeadlineReached: clockResult.deadlineReached,
+      scenarioDeadlineReached: Boolean(clockResult.deadlineReached),
       endingRecommended,
       endingReason: endingRecommended ? recommendation.reason : (clockResult.deadlineReached ? 'deadline' : null),
       scenarioMessages,
@@ -785,15 +808,24 @@ export class GameOrchestrator {
         }).join('\n'),
       });
 
-      // 重试策略（简化版）：所有调用统一使用思考模式 + reasoning_effort='high'
-      // 不再降级到非思考模式 + tool_choice='required'，原因：
-      //   1. 思考模式 + tool_choice 冲突（DeepSeek API 400）
-      //   2. strict: true 已在 tools 中声明，DeepSeek 会强制 LLM 调用 function，无需 tool_choice 兜底
-      //   3. 简化策略避免模式切换带来的输出风格不一致
+      // 重试沿用本次 assembled 的模型/思考配置；Flash 默认由 provider 关闭思考，
+      // pro 或显式 LLM_THINKING_TYPE=enabled 则保留 reasoning_effort='high'。
+      // 思考模式不能传 tool_choice，非思考模式由 provider 使用 required 强制 function。
       // 若思考被 max_tokens 截断（finish_reason=length），直接抛错让用户感知，由其调大 max_tokens
+      const llmStartedAt = Date.now();
       const result = await this.llmProvider.generate(assembledPrompt);
+      const latencyMs = Date.now() - llmStartedAt;
       const raw = result.content;
       lastReasoningContent = result.reasoningContent;
+
+      const effectiveModel = assembledPrompt.modelOverride || this.llmProvider.model || 'default';
+      const thinkingUsed = result.thinkingEnabled ?? Boolean(result.reasoningContent);
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'system',
+        flowType,
+        attempt: attemptNum,
+        content: `[LLM] ${effectiveModel} · ${latencyMs}ms · thinking=${thinkingUsed ? 'enabled' : 'disabled'} · tool_calls=${result.hasToolCall ? 'yes' : 'no'}`,
+      });
 
       // KV Cache 监控：记录每次调用的 token 使用与缓存命中情况
       if (result.usage) {
@@ -940,9 +972,7 @@ export class GameOrchestrator {
     result = await tryRefine(raw);
     if (result.ok) return { raw: result.raw, refinedHtml: result.refinedHtml, reasoningContent: lastReasoningContent };
 
-    // 第二次重试：继续用思考模式 high + 更强的 reminder（不再切换到非思考模式 + tool_choice）
-    // 简化策略：strict: true 已强制 LLM 调用 function，无需 tool_choice 兜底；
-    //          思考模式 + tool_choice 冲突（API 400），故所有重试都保持思考模式
+    // 第二次重试：继续沿用当前模型的思考配置，并追加更强的 reminder。
     this._pushDebug(debugLogs, onDebug, {
       type: 'retry_clear',
       content: `第二次重试：继续使用思考模式 high + 强化 reminder（不再切换到非思考模式）`,
@@ -1252,6 +1282,19 @@ export class GameOrchestrator {
         return diceCheck;
       }
       result = diceCheck;
+    }
+
+    // NARRATION_II 才是检定后的完整叙事；补应用其中的证据、怀疑度和位置更新，
+    // 但不再次推进时钟（本轮耗时已由触发检定的 NARRATION_I 结算）。
+    if (result.branch === 'NARRATIVE' && result.parsed) {
+      const postDiceScenarioResult = this._applyScenarioRuling(session, result.parsed, { advanceClock: false });
+      if (postDiceScenarioResult.scenarioMessages?.length) {
+        scenarioResult.scenarioMessages = scenarioResult.scenarioMessages || [];
+        scenarioResult.scenarioMessages.push(...postDiceScenarioResult.scenarioMessages);
+      }
+      if (postDiceScenarioResult.truthProgress) {
+        scenarioResult.truthProgress = postDiceScenarioResult.truthProgress;
+      }
     }
 
     // NARRATION_II 输出后触发摘要检查（与 handleMessage 的 LLM 调用后处理一致）

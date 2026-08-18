@@ -225,7 +225,9 @@ export class DamageResolver {
     // B 结果格式：固定文案"直视了不可直视之物"
     const targetName = this._getTargetName(target);
     const isPlayer = target.id === 'npc_000';
-    const subject = isPlayer ? '你' : targetName;
+    const subject = isPlayer
+      ? (target.name ? `你（${target.name}）` : '你')
+      : targetName;
     const msg = `【${subject} 直视了不可直视之物，SAN -${actualDamage}（${target.san}/${maxSan}）】`;
 
     this._checkDeparted(target, departedNpcs);
@@ -447,7 +449,9 @@ export class DamageResolver {
    * 获取目标的显示名称。
    */
   _getTargetName(npc) {
-    if (npc.id === 'npc_000') return '玩家';
+    if (npc.id === 'npc_000') {
+      return npc.name ? `玩家（${npc.name}）` : '玩家';
+    }
     if (npc.importance === 'key') return `关键角色(${npc.name})`;
     return npc.name || npc.id;
   }

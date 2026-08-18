@@ -85,7 +85,15 @@ export class NecessarySettingsBuilder {
       }
       lines.push(`Truth progress: ${truthProgress.factCount}/${truthProgress.totalFacts} proven facts; known=${truthProgress.truthKnown}; provable=${truthProgress.truthProvable}.`);
       if (session.scenarioRules?.clueCatalog) {
-        lines.push(`Allowed evidence IDs (do not reveal or award one without narrative support): ${Object.keys(session.scenarioRules.clueCatalog).join(', ')}.`);
+        const clueLines = Object.entries(session.scenarioRules.clueCatalog).map(([id, clue]) => {
+          const state = (session.evidence || []).find(evidence => evidence.id === id);
+          const progress = state?.secured ? 'secured' : state ? 'discovered-not-secured' : 'not-yet-discovered';
+          const location = clue.locationId ? `；recommended location=${clue.locationId}` : '';
+          const hint = clue.discoveryHint ? `；discovery hint=${clue.discoveryHint}` : '';
+          return `${id} [${progress}] source=${clue.source || 'unknown'}; description=${clue.description || ''}${location}${hint}`;
+        });
+        lines.push('Authored evidence catalogue (award only when the player has actually found or secured it; use the exact ID):');
+        lines.push(...clueLines);
       }
       lines.push('', `剧本时钟：${session.scenarioClock.currentTime}，截止 ${session.scenarioClock.deadline}，第 ${session.scenarioClock.turn} 回合，阶段 ${session.scenarioClock.phase}。`);
       lines.push(`怀疑度：${session.suspicion ?? 0}/10。`);

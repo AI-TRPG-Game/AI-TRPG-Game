@@ -7,6 +7,14 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
+function getSuspicionDisplay(value = 0) {
+  const safe = Math.max(0, Math.min(10, Number(value) || 0));
+  if (safe >= 8) return { label: '危机', effect: '对手可能公开阻挠或抢夺证据' };
+  if (safe >= 6) return { label: '受阻', effect: '嫌疑人会限制行动或转移证据' };
+  if (safe >= 3) return { label: '被监视', effect: '调查行动通常额外耗时5分钟' };
+  return { label: '未引起注意', effect: '暂未引起有组织的注意' };
+}
+
 // 旧数据兼容：将 LLM raw 输出渲染为带分隔线的 HTML
 // 注意：新数据已由后端 TextRefiner 预渲染，不再经过此函数
 function renderBotContent(raw) {
@@ -134,7 +142,9 @@ export class GameUIController {
     this.playerEditArea = document.getElementById('player-edit-area');
     this.locationsPanel = document.getElementById('locations-panel');
     this.npcsPanel = document.getElementById('npcs-panel');
+    this.playerStatusPanel = document.getElementById('player-status');
     this.characterStatusPanel = document.getElementById('character-status');
+    this.evidencePanel = document.getElementById('evidence-panel');
     this.inventoryPanel = document.getElementById('inventory-panel');
     this.keyCharactersPanel = document.getElementById('key-characters-panel');
     this.autoGenKeyCharBtn = document.getElementById('btn-auto-gen-key-char');
@@ -518,7 +528,6 @@ export class GameUIController {
       }
       this._botEl = this._appendMessage('', 'bot');
       this._botEl.innerHTML = result.refinedHtml;
-      this._scrollToBottom();
     }
 
     // 剧本时钟由后端在每个已结算回合附带；不能只依赖 displayLog，
@@ -551,6 +560,7 @@ export class GameUIController {
       this._renderDiceConfirm(result.actions);
     }
 
+    this._restoreMessageScroll(opts.scrollState);
     this._updateUI();
   }
 
@@ -642,7 +652,7 @@ export class GameUIController {
       // === B 弹窗 ===
       if (S >= 1 && O === 0) {
         // B1：纯 sancheck
-        const targets = sancchecks.map(s => s.target === 'player' ? '你' : s.target).join('、');
+        const targets = sancchecks.map(s => this._formatActionTarget(s.target)).join('、');
         innerHtml += `<div class="dice-confirm-title">${targets} 直视了不可直视之物，需要进行 SAN 检定</div>`;
       } else if (S === 0 && O >= 1) {
         // B2：纯 others 非 sancheck
@@ -662,7 +672,6 @@ export class GameUIController {
 
     this._diceConfirmEl.innerHTML = innerHtml;
     this.messagesEl.appendChild(this._diceConfirmEl);
-    this._scrollToBottom();
 
     document.getElementById('btn-dice-confirm').addEventListener('click', () =>
       this._confirmDice()
@@ -673,6 +682,15 @@ export class GameUIController {
     }
   }
 
+  _formatActionTarget(targetId) {
+    if (targetId === 'player' || targetId === 'npc_000') {
+      const player = this.session?.npcs?.find(npc => npc.id === 'npc_000');
+      return player?.name ? `你（${escapeHtml(player.name)}）` : '你';
+    }
+    const target = this.session?.npcs?.find(npc => npc.id === targetId);
+    return escapeHtml(target?.name || targetId || '目标');
+  }
+
   _removeDiceConfirm() {
     if (this._diceConfirmEl) {
       this._diceConfirmEl.remove();
@@ -681,6 +699,7 @@ export class GameUIController {
   }
 
   async _confirmDice() {
+    const scrollState = this._captureMessageScroll();
     this._removeDiceConfirm();
     this._setInputLocked(true);
     this._showWaiting();
@@ -707,10 +726,11 @@ export class GameUIController {
         const sancheckActions = (resp.result.actions || this.session.pendingDiceFlow?.actions || [])
           .filter(a => (a.type || a.action_type) === 'sancheck');
         this._renderDiceConfirm(sancheckActions);
+        this._restoreMessageScroll(scrollState);
         return;
       }
 
-      this._renderLlmResponse(resp, { isDiceBranch: true });
+      this._renderLlmResponse(resp, { isDiceBranch: true, scrollState });
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`错误: ${err.message}`, 'error');
@@ -724,6 +744,7 @@ export class GameUIController {
   }
 
   async _cancelDice() {
+    const scrollState = this._captureMessageScroll();
     try {
       const result = await apiClient.cancelDice(this.session);
       this.session = result.session;
@@ -735,6 +756,7 @@ export class GameUIController {
       }
       this._botEl = null;
       this._appendMessage(result.message, 'system');
+      this._restoreMessageScroll(scrollState);
       this._updateUI();
       await this._persistSession();
       this._setInputLocked(false);
@@ -748,6 +770,7 @@ export class GameUIController {
     if (this._isInputBlocked()) return;
     const text = this.promptInput.value.trim();
     if (!text) return;
+    const scrollState = this._captureMessageScroll();
 
     this._appendMessage(text, 'user');
     this.promptInput.value = '';
@@ -761,7 +784,7 @@ export class GameUIController {
       const resp = await apiClient.sendMessage(this.session, text, {
         onDebug: (log) => this._appendDebugPanel(log),
       });
-      this._renderLlmResponse(resp);
+      this._renderLlmResponse(resp, { scrollState });
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`错误: ${err.message}`, 'error');
@@ -785,6 +808,7 @@ export class GameUIController {
       if (!confirmed) return;
     }
 
+    const scrollState = this._captureMessageScroll();
     this._setInputLocked(true);
     this._showWaiting();
     document.getElementById('btn-open-story').disabled = true;
@@ -793,7 +817,7 @@ export class GameUIController {
       const resp = await apiClient.openStory(this.session, {
         onDebug: (log) => this._appendDebugPanel(log),
       });
-      this._renderLlmResponse(resp);
+      this._renderLlmResponse(resp, { scrollState });
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`故事开幕失败: ${err.message}`, 'error');
@@ -892,6 +916,7 @@ export class GameUIController {
 
   async _autoGenKeyChar() {
     if (this._isInputBlocked()) return;
+    const scrollState = this._captureMessageScroll();
     this._appendMessage('根据世界观生成一个合理角色', 'user');
     this.promptInput.value = '';
 
@@ -904,7 +929,7 @@ export class GameUIController {
         '根据世界观生成一个合理角色',
         { onDebug: (log) => this._appendDebugPanel(log) }
       );
-      this._renderLlmResponse(resp);
+      this._renderLlmResponse(resp, { scrollState });
       await this._persistSession();
     } catch (err) {
       this._appendMessage(`AI生成角色失败: ${err.message}`, 'error');
@@ -967,12 +992,28 @@ export class GameUIController {
     el.classList.add('message', type);
     el.textContent = text;
     this.messagesEl.appendChild(el);
-    this._scrollToBottom();
     return el;
   }
 
-  _scrollToBottom() {
-    this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+  _captureMessageScroll() {
+    const el = this.messagesEl;
+    if (!el) return null;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return {
+      top: el.scrollTop,
+      wasNearBottom: distanceFromBottom <= 24,
+    };
+  }
+
+  _restoreMessageScroll(state) {
+    const el = this.messagesEl;
+    if (!el || !state) return;
+    if (state.wasNearBottom) {
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+    const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+    el.scrollTop = Math.min(state.top, maxTop);
   }
 
   _setInputLocked(locked) {
@@ -1046,9 +1087,22 @@ export class GameUIController {
     this.phaseLabel.textContent = `阶段: ${this.session.phase} | 状态: ${this.session.subState}`;
     if (this.session.scenarioClock) {
       const clock = this.session.scenarioClock;
-      const secured = (this.session.evidence || []).filter(e => e.secured).length;
-      this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${clock.phase} · 证据 ${secured}/${(this.session.evidence || []).length} · 怀疑 ${this.session.suspicion ?? 0}/10`;
-      this.scenarioStatus.title = '新手试炼的游戏内时间、阶段、证据和怀疑度';
+      const evidenceList = this.session.evidence || [];
+      const secured = evidenceList.filter(e => e.secured).length;
+      const discovered = evidenceList.filter(e => e.discovered !== false).length;
+      const clueCatalog = this.session.scenarioRules?.clueCatalog;
+      const evidenceTotal = clueCatalog && typeof clueCatalog === 'object'
+        ? Object.keys(clueCatalog).length
+        : evidenceList.length;
+      const truths = this.session.scenarioRules?.truths || {};
+      const securedIds = new Set(evidenceList.filter(e => e.secured).map(e => e.id));
+      const provenFacts = Object.values(truths).filter(required =>
+        Array.isArray(required) && required.every(id => securedIds.has(id))
+      ).length;
+      const suspicion = Number(this.session.suspicion) || 0;
+      const suspicionState = getSuspicionDisplay(suspicion);
+      this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${clock.phase} · 证据 ${secured}/${evidenceTotal}（已发现${discovered}） · 真相 ${provenFacts}/${Object.keys(truths).length} · 怀疑 ${suspicion}/10（${suspicionState.label}）`;
+      this.scenarioStatus.title = `调查证据分为“已发现”和“已保全”；已保全证据才能支撑结局。怀疑度${suspicion}/10：${suspicionState.effect}。`;
     } else {
       // 普通自由剧本没有剧本时钟；明确告知入口，避免把空白状态误认为显示故障。
       this.scenarioStatus.textContent = '无剧本时钟 · 点击左上“试炼”开始';
@@ -1088,10 +1142,28 @@ export class GameUIController {
       )
       .join('') + '<button class="sidebar-add-btn" data-add="location">+ 新增地点</button>';
 
-    // NPC —— 名称 + 编辑（按 id 引用）
-    this.npcsPanel.innerHTML = (this.session.npcs || [])
+    // 证据 —— 明确区分“发现”与“保全”，让线索进度对玩家可见
+    if (this.evidencePanel) {
+      const evidence = this.session.evidence || [];
+      const catalog = this.session.scenarioRules?.clueCatalog || {};
+      this.evidencePanel.innerHTML = evidence.length
+        ? evidence.map(item => {
+          const definition = catalog[item.id] || {};
+          const status = item.secured ? '已保全' : '已发现，待保全';
+          const source = item.source || definition.source || item.id;
+          const description = item.description || definition.description || '';
+          return `<div class="sidebar-evidence-item"><span class="sidebar-evidence-status">${item.secured ? '✓' : '•'}</span><span><strong>${escapeHtml(source)}</strong><small>${escapeHtml(status)}${description ? ` · ${escapeHtml(description)}` : ''}</small></span></div>`;
+        }).join('')
+        : '<div class="sidebar-clickable empty" style="font-size:12px;">尚未发现证据</div>';
+    }
+
+    // NPC —— 名称 + 编辑（按 id 引用）。npc_000 是玩家的内部实体，单独显示在“玩家状态”。
+    const npcEntries = (this.session.npcs || [])
+      .map((n, i) => ({ npc: n, index: i }))
+      .filter(({ npc }) => npc.id !== 'npc_000' && npc.visibility !== 'hidden');
+    this.npcsPanel.innerHTML = npcEntries
       .map(
-        (n, i) => {
+        ({ npc: n, index: i }) => {
           // 主角/邀请角色标签（基于 keyCharacters.length 动态判断 id 区段）
           // 后端 IdAllocator: npc_000=玩家, npc_001~00X=关键角色(X=keyCharacters.length), npc_00(X+1)+=普通NPC
           // 硬编码 npc_001~003 会在"未邀请关键角色"时把第一个普通NPC误标为"已邀请"
@@ -1102,7 +1174,7 @@ export class GameUIController {
             : (npcNum >= 1 && npcNum <= keyCharCount) ? '（已邀请）'
             : '';
           return `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-id="${escapeHtml(n.id ?? '')}" title="${escapeHtml(n.id ?? '')}">${escapeHtml(n.name)}${tag ? `<small style="opacity:0.6"> ${tag}</small>` : ''}<small class="entity-id-badge">${escapeHtml(n.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`;
-        }
+      }
       )
       .join('') + '<button class="sidebar-add-btn" data-add="npc">+ 新增 NPC</button>';
 
@@ -1145,22 +1217,17 @@ export class GameUIController {
    * - 正常：显示 HP/SAN，key 角色额外显示 8 大属性
    */
   _renderCharacterStatus() {
-    if (!this.characterStatusPanel) return;
+    if (!this.characterStatusPanel && !this.playerStatusPanel) return;
     const npcs = this.session?.npcs || [];
-    if (npcs.length === 0) {
-      this.characterStatusPanel.innerHTML = '<div style="color:var(--text-muted);font-size:11px;">暂无角色</div>';
-      return;
-    }
+    const empty = '<div style="color:var(--text-muted);font-size:11px;">暂无角色</div>';
 
-    const html = npcs.map(npc => {
+    const renderStatusItem = (npc) => {
       const name = npc.name || npc.id;
       let label;
-      if (npc.id === 'npc_000') {
-        label = '玩家';
+      if (npc.id === 'npc_000' || npc.importance === 'player') {
+        label = npc.name ? `玩家 · ${name}` : '玩家';
       } else if (npc.importance === 'key') {
         label = `关键角色 · ${name}`;
-      } else if (npc.importance === 'player') {
-        label = '玩家';
       } else {
         label = name;
       }
@@ -1201,9 +1268,19 @@ export class GameUIController {
         <span class="char-name">${escapeHtml(label)}</span>
         <span class="char-hp-san">${line}</span>
       </div>`;
-    }).join('');
+    };
 
-    this.characterStatusPanel.innerHTML = html;
+    const player = npcs.find(npc => npc.id === 'npc_000' || npc.importance === 'player');
+    const otherNpcs = npcs.filter(npc => npc !== player && npc.visibility !== 'hidden');
+
+    if (this.playerStatusPanel) {
+      this.playerStatusPanel.innerHTML = player ? renderStatusItem(player) : empty;
+    }
+    if (this.characterStatusPanel) {
+      this.characterStatusPanel.innerHTML = otherNpcs.length
+        ? otherNpcs.map(renderStatusItem).join('')
+        : empty;
+    }
   }
 
   /**
@@ -1242,7 +1319,6 @@ export class GameUIController {
       </div>
     `;
     this.messagesEl.appendChild(el);
-    this._scrollToBottom();
 
     document.getElementById('btn-restart-yes').addEventListener('click', () => this._restartStory());
     document.getElementById('btn-restart-later').addEventListener('click', () => this._postponeRestart());

@@ -151,6 +151,8 @@ cp .env.example .env
 LLM_API_KEY=your-api-key-here
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
+# 使用 v4-flash 时默认关闭 thinking 以缩短回合延迟；需要时可显式打开
+# LLM_THINKING_TYPE=enabled
 ```
 
 > 推荐使用 **DeepSeek v3/v4** 系列模型，性价比高且支持 JSON 输出模式。使用其他模型（如 GPT-4o）时将 `LLM_BASE_URL` 和 `LLM_MODEL` 改为对应值即可。

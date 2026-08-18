@@ -64,7 +64,7 @@ export class ScheduleService {
     };
   }
 
-  applyStateRuling(session, parsed = {}) {
+  applyStateRuling(session, parsed = {}, { userText = '' } = {}) {
     parsed = parsed || {};
     if (!session.scenarioId) return { evidenceChanges: [], suspicionState: null, crossedSuspicionState: null };
 
@@ -73,8 +73,18 @@ export class ScheduleService {
     if (Number.isFinite(delta)) session.suspicion = Math.max(0, Math.min(10, session.suspicion + Math.trunc(delta)));
     if (parsed.combat_update && typeof parsed.combat_update === 'object') session.combat = parsed.combat_update;
 
-    const evidenceChanges = scenarioProgressService.applyEvidenceChanges(session, parsed.evidence_changes || []);
     const locationChanged = scenarioProgressService.updatePlayerLocation(session, parsed.current_location_id);
+    const inferredEvidenceChanges = scenarioProgressService.inferEvidenceChanges(
+      session,
+      `${userText || ''}\n${parsed.narration || ''}`
+    );
+    const requestedEvidenceChanges = [...inferredEvidenceChanges, ...(parsed.evidence_changes || [])];
+    const deduplicatedEvidenceChanges = [...new Map(
+      requestedEvidenceChanges
+        .filter(change => change && typeof change === 'object' && change.id)
+        .map(change => [change.id, change])
+    ).values()];
+    const evidenceChanges = scenarioProgressService.applyEvidenceChanges(session, deduplicatedEvidenceChanges);
     const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
     return {
       evidenceChanges,

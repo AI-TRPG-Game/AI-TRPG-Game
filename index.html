@@ -788,6 +788,36 @@
             padding: 2px 6px;
             font-size: 10px;
         }
+        .sidebar-evidence-item {
+            display: flex;
+            gap: 6px;
+            align-items: flex-start;
+            padding: 5px 6px;
+            margin-bottom: 3px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        .sidebar-evidence-status {
+            color: var(--accent);
+            font-weight: 700;
+            flex: 0 0 auto;
+        }
+        .sidebar-evidence-item strong,
+        .sidebar-evidence-item small {
+            display: block;
+        }
+        .sidebar-evidence-item strong {
+            color: var(--text-primary);
+            font-size: 11px;
+        }
+        .sidebar-evidence-item small {
+            color: var(--text-muted);
+            font-size: 10px;
+        }
         /* 实体 id 徽章 —— 小灰字显示，便于用户辨识引用编号 */
         .entity-id-badge {
             font-size: 10px;
@@ -1276,8 +1306,16 @@
             <h3>重要地点</h3>
             <div id="locations-panel"></div>
 
+            <h3>调查证据</h3>
+            <div id="evidence-panel"></div>
+
             <div class="sidebar-section-head">
-                <h3>角色状态</h3>
+                <h3>玩家状态</h3>
+            </div>
+            <div id="player-status" class="character-status-panel"></div>
+
+            <div class="sidebar-section-head">
+                <h3>NPC 状态</h3>
             </div>
             <div id="character-status" class="character-status-panel"></div>
 

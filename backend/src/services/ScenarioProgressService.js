@@ -116,6 +116,7 @@ export class ScenarioProgressService {
         source: definition?.source ?? 'unknown source',
         reliability: definition?.reliability ?? 'low',
         secured: false,
+        discovered: true,
         description: definition?.description ?? '',
         truths: definition?.truths ?? [],
       };
@@ -125,6 +126,9 @@ export class ScenarioProgressService {
         source: definition?.source ?? change.source ?? record.source,
         reliability: definition?.reliability ?? change.reliability ?? record.reliability,
         secured: typeof change.secured === 'boolean' ? change.secured : record.secured,
+        discovered: typeof change.discovered === 'boolean'
+          ? change.discovered
+          : (record.discovered !== false),
         description: definition?.description ?? change.description ?? record.description,
         truths: definition?.truths ?? record.truths ?? [],
       });
@@ -132,6 +136,38 @@ export class ScenarioProgressService {
       accepted.push(record);
     }
     return accepted;
+  }
+
+  inferEvidenceChanges(session, userText = '') {
+    const catalog = session.scenarioRules?.clueCatalog;
+    if (!catalog || typeof catalog !== 'object' || typeof userText !== 'string') return [];
+    const text = userText.trim().toLowerCase();
+    if (!text) return [];
+    const currentLocationId = session.playerLocationId;
+    const existingIds = new Set((session.evidence || [])
+      .filter(evidence => evidence.discovered !== false)
+      .map(evidence => evidence.id));
+    return Object.entries(catalog)
+      .filter(([id, clue]) => {
+        if (existingIds.has(id)) return false;
+        const allowedLocations = Array.isArray(clue.locationIds)
+          ? clue.locationIds
+          : (clue.locationId ? [clue.locationId] : []);
+        if (allowedLocations.length > 0 && !allowedLocations.includes(currentLocationId)) return false;
+        const keywords = Array.isArray(clue.keywords) ? clue.keywords : [];
+        return keywords.some(keyword => text.includes(String(keyword).toLowerCase()));
+      })
+      .map(([id]) => ({ id, secured: false }));
+  }
+
+  getEvidenceProgress(session) {
+    const catalog = session.scenarioRules?.clueCatalog;
+    const total = catalog && typeof catalog === 'object'
+      ? Object.keys(catalog).length
+      : (session.evidence || []).length;
+    const discovered = (session.evidence || []).filter(evidence => evidence.discovered !== false).length;
+    const secured = (session.evidence || []).filter(evidence => evidence.secured).length;
+    return { discovered, secured, total };
   }
 
   evaluateTruth(session) {

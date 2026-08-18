@@ -65,7 +65,7 @@ const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：根据玩家行为推进剧情。
 
 字段：
-- narration：叙事文本
+- narration：叙事文本。普通调查/对话请写约300-700字（至少3个有信息量的段落），包含环境、人物反应和行动结果；不要为了凑字重复背景，也不要把 options 或系统判定说明塞进 narration。
 - locations/npcs/items：新增或更新的实体（无则空数组）
 - npc.importance：key/supporting（路人直接在narration中描写）
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
@@ -86,14 +86,14 @@ on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级�
 
 ${buildEntityReferenceRules(false)}
 
-For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity and san_event_id. For an authored scenario, only use a currently allowed SAN event ID from the scenario context: the server overrides the submitted severity and target, and rejects invented/repeated/early/wrong-location events. Never invent evidence IDs: only update clues supplied in the scenario context. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
+For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity and san_event_id. For an authored scenario, only use a currently allowed SAN event ID from the scenario context: the server overrides the submitted severity and target, and rejects invented/repeated/early/wrong-location events. Never invent evidence IDs: only update clues supplied in the scenario context. Set secured=false when the player has found a clue but has not yet protected or recorded it; set secured=true only after the player explicitly obtains, records, compares, or otherwise preserves it. Suspicion should rise for public accusations, forced searches, threats, careless handling, or letting a suspect see protected evidence; it can fall after quiet cooperation or evidence protection. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
 
 const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
 For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity plus a currently allowed san_event_id on every sancheck. Only catalogued evidence IDs may be updated.
 任务：根据系统判定结果推进剧情。系统已完成掷骰和HP/SAN计算，直接承接推进，不重复输出判定格式。
 
 字段：
-- narration：承接判定结果的叙事文本
+- narration：承接判定结果的叙事文本，约300-700字（至少3个有信息量的段落），体现检定结果、人物反应和可执行的后果；不要重复系统掷骰文字。
 - locations/npcs/items：新增或更新的实体（无则空数组）
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
@@ -103,7 +103,7 @@ For an authored scenario, use a minimum 10-minute meaningful turn and include sa
   - actions非空=递归检定（options填null）
   - actions为null=正常推进，${OPTIONS_RULE}
 
-每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}；若上下文含剧本时钟则按其规则裁定行动时间与状态。`;
+每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}；若上下文含剧本时钟则按其规则裁定行动时间与状态。剧本证据只能使用上下文中的精确 ID；发现但未保全填 secured=false，明确取得/记录/保护后再填 secured=true。`;
 
 const SUMMARY_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：总结迄今剧情，保证后续可正常推进，暗示故事可能的伏笔。
