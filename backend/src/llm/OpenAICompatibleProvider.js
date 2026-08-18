@@ -66,10 +66,13 @@ export class OpenAICompatibleProvider extends LLMProvider {
       stream: false,                            // ← 关闭流式
       // 移除 response_format —— strict 模式走 tools
       tools,                                    // ← strict function 定义
+      // DeepSeek V4 默认开启 thinking；非思考路径也必须显式发送 disabled，
+      // 否则下面的 tool_choice=required 会被服务端判定为 thinking + tool_choice，
+      // 从而返回 400（"Thinking mode does not support this tool_choice"）。
+      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
     };
 
     if (thinkingEnabled) {
-      body.thinking = { type: 'enabled' };
       // 思考强度控制（官方文档：思考模式下默认 high，复杂 Agent 任务自动 max）
       if (reasoningEffort && (reasoningEffort === 'high' || reasoningEffort === 'max')) {
         body.reasoning_effort = reasoningEffort;

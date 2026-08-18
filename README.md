@@ -22,6 +22,18 @@
 - **选项解析**：支持「选项 A」「选项 A 和 B」等快捷输入，自动映射为完整行动描述
 - **会话持久化**：基于 SQLite 的全量存档，随时退出、随时继续
 
+## 最近更新
+
+当前版本已围绕《白桦站的末班车》试炼和 LLM 稳定性完成以下改进：
+
+- **时间与地点推进**：试炼时钟从 00:10 推进至 06:00；有意义的行动至少消耗 10 分钟。地点会在玩家首次发现后显示在侧栏，计划事件会根据时间和当前位置触发。
+- **SAN 与心理后果**：SAN 检定区分不安、创伤和灾变等级，并可触发早期创伤、惩罚骰或失控风险。SAN 日志会显示玩家的实际身份，而不是内部 NPC 编号。
+- **证据、线索与真相**：线索分为“已发现”和“已保全”；调查行动和当前位置可以发现剧本预设证据，保全证据后才会推进真相事实。结局需要满足证据条件并由玩家明确选择，不能仅由 LLM 的一句叙述触发。
+- **角色与开幕信息**：苏棠、林晚等重要角色会在开幕阶段被介绍并显示在 NPC 列表中；主角单独列在“玩家状态”区域，不再归入 NPC。
+- **选项与阅读体验**：输入「选项 A/B/C」会解析为对应的完整行动并原样传给 LLM；生成叙述、骰子和重试后页面会保持原滚动位置，方便继续阅读。
+- **DeepSeek thinking 与工具调用**：`deepseek-v4-flash` 未显式配置时默认关闭 thinking 以降低延迟；可用 `LLM_THINKING_TYPE=enabled` 或 `disabled` 覆盖。请求会显式声明 thinking 状态：非 thinking 请求可以使用 `tool_choice`，thinking 请求会自动移除该字段，避免 DeepSeek V4 返回 400。
+- **诊断与回归测试**：后端调试记录模型、延迟、thinking 状态和工具调用结果，并新增选项解析、白桦站引导、SAN 身份显示和 LLM 请求配置测试。
+
 ## 技术架构
 
 ```
@@ -107,7 +119,7 @@ WORLD_SETTING ──► CHARACTER_SETTING ──► STORY_PLAY
 
 ### LLM 输出协议
 
-所有阶段的 LLM 输出均为 **JSON**（通过 `response_format: json_object` 约束），各阶段有不同的必填字段：
+所有阶段的 LLM 输出均为 **JSON**（通过 strict function tools 约束），各阶段有不同的必填字段：
 
 | 阶段 | 输出 JSON 必填字段 | 关键内容 |
 |------|-------------------|---------|
@@ -150,8 +162,8 @@ cp .env.example .env
 ```env
 LLM_API_KEY=your-api-key-here
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-# 使用 v4-flash 时默认关闭 thinking 以缩短回合延迟；需要时可显式打开
+LLM_MODEL=deepseek-v4-pro
+# 若改用 deepseek-v4-flash，未显式配置时默认关闭 thinking
 # LLM_THINKING_TYPE=enabled
 ```
 
