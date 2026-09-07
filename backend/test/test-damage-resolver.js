@@ -237,7 +237,7 @@ assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_00
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'player', attr: 'hp', diceCount: 1, diceSides: 100, diceBonus: 0, effect: 'damage' }
+          { target: 'player', attr: 'hp', diceCount: 0, diceSides: 0, diceBonus: 100, effect: 'damage' }
       ]}
     ]
   };
@@ -269,7 +269,7 @@ assert(resolver._sanPenaltyDice({ scenarioId: 'tutorial', npcs: [makeNpc('npc_00
   const parsed = {
     actions: [
       { type: 'direct', trigger: 'others', changes: [
-          { target: 'npc_002', attr: 'hp', diceCount: 1, diceSides: 100, diceBonus: 0, effect: 'damage' }
+          { target: 'npc_002', attr: 'hp', diceCount: 0, diceSides: 0, diceBonus: 100, effect: 'damage' }
       ]}
     ]
   };

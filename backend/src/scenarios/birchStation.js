@@ -23,6 +23,19 @@ export const BIRCH_STATION_TUTORIAL = {
       loc_009: { name: '积水地下入口', description: '站务楼地下的铁门后积水渐退，冷风从黑暗深处带来矿石的腥味。' },
       loc_010: { name: '矿难转运室', description: '地下甬道尽头的封闭转运室，留下了矿难后从未公开的货物与名单。' },
     },
+    // 用于判断玩家能否及时介入相邻地点的事件，也为后续统一计算移动耗时提供基础。
+    locationGraph: {
+      loc_001: ['loc_002', 'loc_003'],
+      loc_002: ['loc_001', 'loc_004'],
+      loc_003: ['loc_001', 'loc_005'],
+      loc_004: ['loc_002'],
+      loc_005: ['loc_003', 'loc_006', 'loc_008'],
+      loc_006: ['loc_005', 'loc_007', 'loc_009'],
+      loc_007: ['loc_006'],
+      loc_008: ['loc_005'],
+      loc_009: ['loc_006', 'loc_010'],
+      loc_010: ['loc_009'],
+    },
     // SAN 事件由剧本作者定义，模型只能从当前可用事件中选择；解析器会强制使用这里的严重度和目标。
     sanEvents: {
       san_signal_0040: { at: '00:40', locationId: 'loc_003', severity: 'unease', target: 'player', label: '站台尽头本不该亮起的信号灯' },
@@ -91,14 +104,17 @@ export const BIRCH_STATION_TUTORIAL = {
   locations: [
     { id: 'loc_001', name: '头等包厢外', description: '顾言的反锁包厢前，狭窄走廊被雨声和昏黄壁灯填满。', firstSeenAt: 0, lastUpdatedAt: 0 },
     { id: 'loc_002', name: '行李车', description: '堆满旅行箱和检修工具的车厢，通往车顶的梯门上有水迹。', firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'loc_003', name: '白桦站站台', description: '积水淹过石缝，倾斜的站牌后方，尽头那盏信号灯仍在雨里闪烁。', firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'loc_005', name: '站务楼候车厅', description: '褪色时刻表下散着潮湿座椅，墙上的旧画框正对着废弃月台。', firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'loc_008', name: '乘务员休息室', description: '许薇和林晚暂时避雨的狭小房间，墙上贴着褪色的检修班表。', firstSeenAt: 0, lastUpdatedAt: 0 },
   ],
   npcs: [
-    { id: 'npc_000', name: '调查记者', baseDescription: '追查顾言失踪前录音的调查记者。', currentState: '站在包厢门外，尚未开始调查。', importance: 'player', hp: 11, maxHp: 11, san: 60, maxSan: 60, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
-    { id: 'npc_001', name: '沈岐医生', baseDescription: '衣着整洁的随车医生，急于将死亡定为意外。', currentState: '避开尸体旁的针孔，催促乘务员封锁包厢。', importance: 'key', hp: 9, maxHp: 9, san: 45, maxSan: 45, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
-    { id: 'npc_002', name: '许薇', baseDescription: '年轻乘务员，记得列车停电前后的异常。', currentState: '脸色苍白，紧攥着调度钥匙。', importance: 'key', hp: 8, maxHp: 8, san: 50, maxSan: 50, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
-    { id: 'npc_003', name: '程岳', baseDescription: '自称工程顾问的乘客，与白桦站旧矿难有关。', currentState: '尚未公开露面。', importance: 'key', hp: 10, maxHp: 10, san: 40, maxSan: 40, visibility: 'hidden', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
-    { id: 'npc_004', name: '苏棠', baseDescription: '替报社画插图的年轻画师，停电前在白桦站候车厅作画。', currentState: '守着一幅尚未干透的画，不愿解释画中多出的第七个人。', importance: 'supporting', hp: null, maxHp: null, san: null, maxSan: null, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
-    { id: 'npc_005', name: '林晚', baseDescription: '白桦站临时检修员，负责旧站钥匙、检修班表和地下入口。', currentState: '在乘务员休息室整理班表，声称自己没有离开过。', importance: 'key', hp: null, maxHp: null, san: null, maxSan: null, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_000', name: '调查记者', baseDescription: '追查顾言失踪前录音的调查记者。', currentState: '站在包厢门外，尚未开始调查。', locationId: 'loc_001', importance: 'player', hp: 11, maxHp: 11, san: 60, maxSan: 60, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_001', name: '沈岐医生', baseDescription: '衣着整洁的随车医生，急于将死亡定为意外。', currentState: '避开尸体旁的针孔，催促乘务员封锁包厢。', locationId: 'loc_001', importance: 'key', hp: 9, maxHp: 9, san: 45, maxSan: 45, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_002', name: '许薇', baseDescription: '年轻乘务员，记得列车停电前后的异常。', currentState: '脸色苍白，紧攥着调度钥匙。', locationId: 'loc_001', importance: 'key', hp: 8, maxHp: 8, san: 50, maxSan: 50, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_003', name: '程岳', baseDescription: '自称工程顾问的乘客，与白桦站旧矿难有关。', currentState: '尚未公开露面。', locationId: 'loc_006', importance: 'key', hp: 10, maxHp: 10, san: 40, maxSan: 40, visibility: 'hidden', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_004', name: '苏棠', baseDescription: '替报社画插图的年轻画师，停电前在白桦站候车厅作画。', currentState: '守着一幅尚未干透的画，不愿解释画中多出的第七个人。', locationId: 'loc_005', importance: 'supporting', hp: null, maxHp: null, san: null, maxSan: null, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
+    { id: 'npc_005', name: '林晚', baseDescription: '白桦站临时检修员，负责旧站钥匙、检修班表和地下入口。', currentState: '在乘务员休息室整理班表，声称自己没有离开过。', locationId: 'loc_008', importance: 'key', hp: null, maxHp: null, san: null, maxSan: null, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
   ],
   inventory: [
     { id: 'item_001', name: '顾言的半段录音', status: '已获得', description: '录音在最关键处中断，信中警告不要听完整段。', firstSeenAt: 0, lastUpdatedAt: 0 },
@@ -108,15 +124,149 @@ export const BIRCH_STATION_TUTORIAL = {
     { id: 'evidence_002', category: 'murder', source: '地毯湿泥', reliability: 'medium', secured: false, discovered: true, description: '湿泥来自不应开放的车顶通道。' },
   ],
   scheduledEvents: [
-    ['broadcast_0040', '00:40', '广播要求乘客留在车内；你获得第一次自由调查机会。', 'hook', ['loc_003']],
-    ['blackout_0110', '01:10', '人为停电。许薇昏倒，手提箱被调包；行李车车顶水迹变得可疑。', 'investigation', ['loc_004']],
-    ['painting_0140', '01:40', '苏棠完成画作，画中出现站务楼与第七名乘客。', 'investigation', ['loc_005']],
-    ['power_0210', '02:10', '电力恢复，白桦站站务楼可以进入。', 'investigation', ['loc_006']],
-    ['records_0240', '02:40', '程岳开始销毁调度记录；赶到可保住完整记录，迟到仍会留下残页。', 'investigation', ['loc_007']],
-    ['confession_0310', '03:10', '若信任足够，林晚会坦白并交出检修图。', 'investigation', ['loc_008']],
-    ['entrance_0340', '03:40', '积水下降，地下入口的线索浮现。', 'crisis', ['loc_009']],
-    ['seizure_0440', '04:40', '程岳与沈岐开始争夺录音、矿石和药物记录；危机爆发。', 'crisis', ['loc_010']],
-    ['departure_0510', '05:10', '发车广播响起，嫌疑人的立场公开；调查不再能无限扩张。', 'aftermath'],
-    ['last_boarding_0550', '05:50', '最后登车警告：只能再做一次取舍。', 'aftermath'],
-  ].map(([id, at, text, phase, revealsLocations = []]) => ({ id, at, text, phase, revealsLocations, fired: false, outcome: null })),
+    {
+      id: 'broadcast_0040', at: '00:40', phase: 'hook', priority: 30,
+      placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: {
+          outcome: 'broadcast_heard',
+          instruction: '把要求乘客留在车内的广播作为当前场景内所有人都能听见的变化；它开放行动空间，但不要替玩家决定去向。',
+          setFlags: { passenger_restriction_announced: true },
+        },
+      },
+    },
+    {
+      id: 'blackout_0110', at: '01:10', phase: 'investigation', priority: 90,
+      placement: { mode: 'global', focusLocationId: 'loc_001' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        present: {
+          outcome: 'blackout_intervention_window',
+          instruction: '立刻让人为停电打断玩家的行动。玩家与许薇同处包厢走廊，必须给玩家发现、保护她或追逐调包者的机会；不要预先断言她必然昏倒或手提箱必然被调包。',
+          npcUpdates: { npc_002: { currentState: '停电骤临，她失去平衡并仍紧攥调度钥匙。' } },
+          revealsLocations: ['loc_004'], setFlags: { blackout_started: true },
+        },
+        remote: {
+          outcome: 'blackout_remote',
+          instruction: '立刻让全站停电打断玩家的行动。玩家不在许薇身边，只能感知黑暗、列车异响和远处短促的动静；不要直接透露谁昏倒或谁调包了手提箱。',
+          npcUpdates: { npc_002: { currentState: '停电中在包厢走廊遭到袭击，去向暂时不明。' } },
+          aftermathInstruction: '玩家回到头等包厢外时，呈现许薇遇袭和手提箱被动过的可观察余波，并留下通往车顶检修通道的水迹；不要提供玩家未调查出的幕后身份。',
+          aftermathLocationId: 'loc_001', leavesAftermath: true,
+          revealsLocations: ['loc_004'], setFlags: { blackout_started: true, suitcase_tampered_offscreen: true },
+        },
+      },
+    },
+    {
+      id: 'painting_0140', at: '01:40', latestAt: '02:20', phase: 'investigation', priority: 35,
+      placement: { mode: 'fixed', locationId: 'loc_005' }, absencePolicy: 'defer', status: 'dormant', fired: false, outcome: null,
+      branches: {
+        present: { outcome: 'painting_witnessed', instruction: '苏棠在玩家面前补完画作，第七个身影在最后一笔后出现。只呈现可观察异常，并让玩家决定如何询问或检查。' },
+        nearby: { outcome: 'painting_intercept', instruction: '玩家在相邻区域听见苏棠惊呼，可以赶到候车厅查看刚完成的画作。' },
+        expired: { outcome: 'painting_completed_offscreen', aftermathInstruction: '玩家进入候车厅后发现苏棠已经完成画作；画上异常仍可调查。' },
+      },
+    },
+    {
+      id: 'power_0210', at: '02:10', phase: 'investigation', priority: 45,
+      placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: {
+          outcome: 'power_restored',
+          instruction: '让电力恢复成为所有地点都能感知的环境变化，并说明站务办公室现在可以进入；不要强迫玩家前往。',
+          revealsLocations: ['loc_006'], setFlags: { power_restored: true },
+        },
+      },
+    },
+    {
+      id: 'records_0240', at: '02:40', latestAt: '03:00', phase: 'investigation', priority: 95,
+      placement: { mode: 'fixed', locationId: 'loc_006', requiredParticipants: ['npc_003'] },
+      absencePolicy: 'resolve_offscreen', status: 'dormant', fired: false, outcome: null,
+      branches: {
+        present: {
+          outcome: 'records_intervention_window',
+          instruction: '玩家就在站务办公室时撞见程岳准备销毁调度记录。呈现正在发生、可阻止的行为；不要直接判定记录得救或毁坏，必要时请求检定。',
+          npcUpdates: { npc_003: { visibility: 'visible', locationId: 'loc_006', currentState: '被撞见正在处理调度记录，必须立即应对玩家。' } },
+          revealsLocations: ['loc_007'], setFlags: { records_crisis_started: true },
+        },
+        nearby: {
+          outcome: 'records_intercept_window',
+          instruction: '玩家在站务办公室相邻区域闻到焦纸味或听见柜门声，仍有短暂机会赶去阻止程岳；不要提前决定结果。',
+          npcUpdates: { npc_003: { locationId: 'loc_006', currentState: '正在站务办公室匆忙销毁调度记录。' } },
+          revealsLocations: ['loc_007'], setFlags: { records_crisis_started: true },
+        },
+        absent: {
+          outcome: 'records_partially_destroyed',
+          npcUpdates: { npc_003: { locationId: 'loc_006', currentState: '已经销毁大部分调度记录并离开现场。' } },
+          aftermathInstruction: '玩家后来进入站务办公室时，只能发现烧焦残页、灰烬和匆忙离开的痕迹；残页仍须保证提供一条较弱但可用的线索路径。',
+          revealsLocations: ['loc_007'], setFlags: { records_partially_destroyed: true },
+        },
+      },
+    },
+    {
+      id: 'confession_0310', at: '03:10', latestAt: '04:10', phase: 'investigation', priority: 75,
+      placement: { mode: 'fixed', locationId: 'loc_008', requiredParticipants: ['npc_005'] },
+      absencePolicy: 'defer', status: 'dormant', fired: false, outcome: null,
+      branches: {
+        present: {
+          outcome: 'confession_conversation',
+          instruction: '林晚愿意试探性开口，但完整供词和检修图取决于玩家是否承诺保护她与证据。先进行一段可回应的信任对话，不要无条件一次性交出全部真相。',
+          npcUpdates: { npc_005: { locationId: 'loc_008', currentState: '决定试探玩家是否值得信任，准备谈及检修图。' } },
+          setFlags: { lin_wan_ready_to_talk: true },
+        },
+        nearby: {
+          outcome: 'confession_invitation',
+          instruction: '林晚从休息室找到或叫住附近的玩家，低声提出只在安全处谈话；让玩家决定是否跟随并承诺保护她。',
+          npcUpdates: { npc_005: { currentState: '主动寻找玩家，要求在安全处私下谈话。' } },
+          setFlags: { lin_wan_ready_to_talk: true },
+        },
+        expired: {
+          outcome: 'confession_note_hidden',
+          npcUpdates: { npc_005: { currentState: '未能等到可信回应，藏起检修图后离开休息室。' } },
+          aftermathInstruction: '玩家后来进入休息室时可发现林晚仓促留下的藏匿提示；它不能等同完整证词，但必须保留通往检修图的替代路线。',
+          setFlags: { lin_wan_left_hidden_hint: true },
+        },
+      },
+    },
+    {
+      id: 'entrance_0340', at: '03:40', phase: 'crisis', priority: 50,
+      placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: {
+          outcome: 'water_receded',
+          instruction: '用排水声、风向和积水变化让玩家得知地下入口已经露出；这是新选择而非强制路线。',
+          revealsLocations: ['loc_009'], setFlags: { underground_entrance_open: true },
+        },
+      },
+    },
+    {
+      id: 'seizure_0440', at: '04:40', phase: 'crisis', priority: 100,
+      placement: { mode: 'player_current', requiredParticipants: ['npc_003', 'npc_001'] },
+      status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: {
+          outcome: 'evidence_seizure_confrontation',
+          instruction: '把程岳与沈岐对关键证据的争夺带到玩家当前地点，但只有在说明他们追踪到玩家或证据的合理路径后才让两人现身。他们目标不同，给玩家保护证据、谈判、逃脱或利用分歧的机会。',
+          npcUpdates: {
+            npc_003: { visibility: 'visible', currentState: '追踪到玩家所在区域，准备强夺关键证据。' },
+            npc_001: { currentState: '来到玩家所在区域，试图带走药物记录和异常资料。' },
+          },
+          combatUpdate: { active: true, round: 1, objective: '保护证据或脱离围堵', exitConditions: ['证据被安全转移', '玩家成功撤离', '对手退让或互相背叛'], participants: ['npc_000', 'npc_001', 'npc_003'] },
+          moveParticipantsToScene: true,
+          revealsLocations: ['loc_010'], setFlags: { seizure_confrontation_started: true },
+        },
+      },
+    },
+    {
+      id: 'departure_0510', at: '05:10', phase: 'aftermath', priority: 85,
+      placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: { outcome: 'departure_warning', instruction: '让发车广播和人员公开站队收缩调查空间，引导玩家开始处理证据和最终立场，但仍保留行动选择。', setFlags: { departure_warning_given: true } },
+      },
+    },
+    {
+      id: 'last_boarding_0550', at: '05:50', phase: 'aftermath', priority: 110,
+      placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
+      branches: {
+        foreground: { outcome: 'last_choice_window', instruction: '发出最后登车警告，明确玩家只剩一次关键取舍。给出的结局选项必须使用“最终决定：公开真相 / 最终决定：保全并带走证据 / 最终决定：销毁或压下真相 / 最终决定：撤离白桦站”这类明确措辞，避免把普通移动误判为最终选择。', setFlags: { final_choice_requested: true } },
+      },
+    },
+  ],
 };

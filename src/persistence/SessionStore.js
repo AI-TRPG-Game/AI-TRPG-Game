@@ -77,9 +77,14 @@ function normalizeSession(session) {
     playerLocationId: session.playerLocationId ?? null,
     sanity: session.sanity ?? null,
     scheduledEvents: Array.isArray(session.scheduledEvents) ? session.scheduledEvents : [],
+    activeScene: session.activeScene ?? null,
+    scenarioFlags: session.scenarioFlags && typeof session.scenarioFlags === 'object'
+      ? session.scenarioFlags
+      : {},
     evidence: Array.isArray(session.evidence) ? session.evidence : [],
     suspicion: Number.isFinite(session.suspicion) ? session.suspicion : 0,
     combat: session.combat ?? null,
+    finalChoice: session.finalChoice ?? null,
     endingState: session.endingState ?? null,
     createdAt: session.createdAt || now,
     updatedAt: session.updatedAt || now,

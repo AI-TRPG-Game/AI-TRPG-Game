@@ -77,6 +77,20 @@ export class NecessarySettingsBuilder {
       lines.push(`SAN state: ${sanState.label}. Suspicion state: ${suspicionState.label} (${suspicionState.effect})`);
       const currentLocation = (session.locations || []).find(location => location.id === session.playerLocationId);
       lines.push(`Current player location: ${currentLocation ? `${currentLocation.id} (${currentLocation.name})` : 'unknown'}. Set current_location_id to a discovered location only when the player actually moves there.`);
+      const actorLocations = (session.npcs || [])
+        .filter(npc => npc.locationId && npc.status !== 'departed')
+        .map(npc => `${npc.id}=${npc.locationId}`);
+      if (actorLocations.length) {
+        lines.push(`GM-only actor positions: ${actorLocations.join(', ')}. Do not teleport actors; only narrate a move when the route and elapsed time make it plausible. A non-co-located actor's state is private GM information until the protagonist perceives evidence of it.`);
+      }
+      if (session.activeScene) {
+        const sceneLocation = (session.locations || []).find(location => location.id === session.activeScene.locationId);
+        lines.push('');
+        lines.push('==== GM-ONLY ACTIVE SCENE DIRECTIVE (highest priority for this turn) ====');
+        lines.push(`Scene kind: ${session.activeScene.kind}; event=${session.activeScene.eventId}; outcome=${session.activeScene.outcome || 'pending'}; location=${sceneLocation?.name || session.activeScene.locationId || 'current location'}.`);
+        lines.push(session.activeScene.instruction);
+        lines.push('Integrate this development into the narration itself. Show only what the protagonist can perceive. Do not print event IDs, branch names, scheduler metadata, or a separate system-event announcement. If it interrupts the declared action, make the interruption clear and stop at the next meaningful player decision.');
+      }
       const activeTrauma = session.sanity?.activeTrauma;
       if (activeTrauma) lines.push(`Active acute trauma: ${activeTrauma.label}. ${activeTrauma.message}`);
       const availableSanEvents = scenarioProgressService.getAvailableSanEvents(session);

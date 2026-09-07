@@ -749,15 +749,14 @@ export class GameUIController {
       const result = await apiClient.cancelDice(this.session);
       this.session = result.session;
       this._removeDiceConfirm();
-      // 移除含 dice 的 bot 气泡
-      if (this._dicePendingBotEl) {
-        this._dicePendingBotEl.remove();
-        this._dicePendingBotEl = null;
-      }
+      // 后端会恢复完整的回合前快照；从持久化 displayLog 重绘，确保玩家输入、
+      // 待判定叙事、事件队列和侧栏状态不会留下半个已取消回合。
+      this.messagesEl.innerHTML = '';
+      this._dicePendingBotEl = null;
       this._botEl = null;
-      this._appendMessage(result.message, 'system');
+      this._waitingEl = null;
+      this._restoreUI();
       this._restoreMessageScroll(scrollState);
-      this._updateUI();
       await this._persistSession();
       this._setInputLocked(false);
     } catch (err) {

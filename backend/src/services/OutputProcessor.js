@@ -27,6 +27,7 @@ export class OutputProcessor {
         branch: 'ACTIONS',
         actions: parsed[ACTIONS],
         raw: rawText,
+        parsed,
       };
     }
 

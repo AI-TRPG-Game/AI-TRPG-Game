@@ -39,9 +39,19 @@ assert(truth.truthKnown && !truth.truthProvable && truth.factCount === 3, 'three
 assert(!service.canAcceptRecommendedEnding(session), 'the truth alone must not end the game before the player makes a final choice');
 session.chatRecord = [{ role: 'player', content: 'I publish the evidence and expose the case.' }];
 assert(service.canAcceptRecommendedEnding(session), 'a player final choice plus sufficient truth should allow an early ending');
+assert(session.finalChoice === 'expose', 'an explicit final commitment should be stored as structured state');
+session.chatRecord = [{ role: 'player', content: 'Should I publish the evidence?' }];
+assert(!service.canAcceptRecommendedEnding(session), 'a question about publishing must not be mistaken for a final choice');
+session.chatRecord = [{ role: 'player', content: 'I do not publish the evidence.' }];
+assert(!service.canAcceptRecommendedEnding(session), 'a negated ending statement must not be mistaken for a final choice');
 service.applyEvidenceChanges(session, [{ id: 'd', secured: true }]);
 truth = service.evaluateTruth(session);
-assert(truth.truthProvable && service.chooseEndingType(session, 'player exposes the case') === 'truth_exposed', 'all authored facts should produce a deterministic truth-exposed ending');
+session.finalChoice = 'expose';
+assert(truth.truthProvable && service.chooseEndingType(session, 'player exposes the case') === 'truth_exposed', 'proof plus an expose choice should produce the truth-exposed ending');
+session.finalChoice = 'destroy';
+assert(service.chooseEndingType(session, 'player destroys the case') === 'truth_sunk', 'full proof must not override a player choice to destroy the truth');
+session.finalChoice = 'preserve';
+assert(service.chooseEndingType(session, 'player preserves the case') === 'forbidden_cargo', 'preserving the evidence should produce the forbidden-cargo ending');
 
 assert(service.getSanState(50).id === 'uneasy', 'SAN 50 should be uneasy');
 assert(service.getSanState(45).id === 'shaken', 'SAN 45 should be shaken and gain an early penalty');

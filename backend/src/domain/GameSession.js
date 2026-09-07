@@ -40,9 +40,14 @@ export class GameSession {
     this.playerLocationId = data.playerLocationId ?? null;
     this.sanity = data.sanity ?? null;
     this.scheduledEvents = Array.isArray(data.scheduledEvents) ? data.scheduledEvents : [];
+    this.activeScene = data.activeScene ?? null;
+    this.scenarioFlags = data.scenarioFlags && typeof data.scenarioFlags === 'object'
+      ? data.scenarioFlags
+      : {};
     this.evidence = Array.isArray(data.evidence) ? data.evidence : [];
     this.suspicion = Number.isFinite(data.suspicion) ? data.suspicion : 0;
     this.combat = data.combat ?? null;
+    this.finalChoice = data.finalChoice ?? null;
     this.endingState = data.endingState ?? null;
     this.createdAt = data.createdAt ?? new Date().toISOString();
     this.updatedAt = data.updatedAt ?? new Date().toISOString();
@@ -70,6 +75,7 @@ export class GameSession {
       if (!npc.visibility) npc.visibility = 'visible';
       if (!npc.status) npc.status = 'active';
       if (npc.attributes === undefined) npc.attributes = null;
+      if (npc.locationId === undefined) npc.locationId = null;
       // 清理已移除的 background 枚举值（旧数据可能有）
       if (npc.importance === 'background') {
         // background 角色本不应进入 npcs 数组，迁移时降级为 supporting
@@ -165,12 +171,20 @@ export class GameSession {
     const scheduledById = new Map(BIRCH_STATION_TUTORIAL.scheduledEvents.map(event => [event.id, event]));
     this.scheduledEvents = (this.scheduledEvents || []).map(event => {
       const authored = scheduledById.get(event.id);
-      return authored
+      const merged = authored
         ? { ...authored, ...event, revealsLocations: event.revealsLocations ?? authored.revealsLocations ?? [] }
         : event;
+      if (!event.status) merged.status = event.fired ? 'resolved' : (authored?.status || 'dormant');
+      if (merged.revealed === undefined) merged.revealed = Boolean(event.fired);
+      return merged;
     });
 
     if (!Array.isArray(this.locations)) this.locations = [];
+    for (const initialLocation of BIRCH_STATION_TUTORIAL.locations || []) {
+      if (!this.locations.some(entry => entry.id === initialLocation.id)) {
+        this.locations.push(structuredClone(initialLocation));
+      }
+    }
     for (const event of this.scheduledEvents.filter(event => event.fired)) {
       for (const locationId of event.revealsLocations || []) {
         const location = this.scenarioRules.locationCatalog[locationId];
@@ -185,8 +199,11 @@ export class GameSession {
       }
     }
     for (const authoredNpc of BIRCH_STATION_TUTORIAL.npcs || []) {
-      if (!this.npcs.some(npc => npc.id === authoredNpc.id)) {
+      const existingNpc = this.npcs.find(npc => npc.id === authoredNpc.id);
+      if (!existingNpc) {
         this.npcs.push(structuredClone(authoredNpc));
+      } else if (!existingNpc.locationId && authoredNpc.locationId) {
+        existingNpc.locationId = authoredNpc.locationId;
       }
     }
     if (!this.playerLocationId) this.playerLocationId = this.scenarioRules.initialLocationId;
@@ -262,9 +279,12 @@ export class GameSession {
       playerLocationId: this.playerLocationId,
       sanity: this.sanity,
       scheduledEvents: this.scheduledEvents,
+      activeScene: this.activeScene,
+      scenarioFlags: this.scenarioFlags,
       evidence: this.evidence,
       suspicion: this.suspicion,
       combat: this.combat,
+      finalChoice: this.finalChoice,
       endingState: this.endingState,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,

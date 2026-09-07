@@ -161,7 +161,10 @@ export class DiceService {
     const roll = Number(rollValue);
 
     // 极端值优先
-    if (roll === 1) return '大成功';
+    // A zero-rated skill cannot succeed without an explicit minimum/base chance.
+    // Treating 01 as a critical success at skill 0 made "guaranteed failure"
+    // checks flaky and granted competence the character does not possess.
+    if (roll === 1 && sp > 0) return '大成功';
     if (roll === 100) return '大失败';
     if (roll >= 96 && sp < 50) return '大失败';
 

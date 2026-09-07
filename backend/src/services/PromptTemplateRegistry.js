@@ -64,6 +64,8 @@ ${buildEntityReferenceRules(true)}`;
 const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：根据玩家行为推进剧情。
 
+若设定上下文含“GM-ONLY ACTIVE SCENE DIRECTIVE”，必须先把该事件自然写进本轮场景，再处理或打断玩家原行动。事件尚未由系统宣告，不能假设玩家已经知道；只写主角可感知的内容，不输出事件ID、分支名或调度信息。
+
 字段：
 - narration：叙事文本。普通调查/对话请写约300-700字（至少3个有信息量的段落），包含环境、人物反应和行动结果；不要为了凑字重复背景，也不要把 options 或系统判定说明塞进 narration。
 - locations/npcs/items：新增或更新的实体（无则空数组）
@@ -91,6 +93,8 @@ For an authored scenario: each meaningful narrated turn costs at least 10 minute
 const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
 For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity plus a currently allowed san_event_id on every sancheck. Only catalogued evidence IDs may be updated.
 任务：根据系统判定结果推进剧情。系统已完成掷骰和HP/SAN计算，直接承接推进，不重复输出判定格式。
+
+若设定上下文含“GM-ONLY ACTIVE SCENE DIRECTIVE”，检定后的叙事必须继续遵守该场景事实，只写主角可感知的内容，不输出事件ID、分支名或调度信息。
 
 字段：
 - narration：承接判定结果的叙事文本，约300-700字（至少3个有信息量的段落），体现检定结果、人物反应和可执行的后果；不要重复系统掷骰文字。

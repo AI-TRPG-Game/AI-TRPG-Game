@@ -110,6 +110,7 @@ export class ScenarioProgressService {
       if (catalog && !definition) continue;
 
       const existing = session.evidence.find(evidence => evidence.id === id);
+      const before = existing ? JSON.stringify(existing) : null;
       const record = existing || {
         id,
         category: definition?.category ?? 'other',
@@ -125,15 +126,18 @@ export class ScenarioProgressService {
         category: definition?.category ?? change.category ?? record.category,
         source: definition?.source ?? change.source ?? record.source,
         reliability: definition?.reliability ?? change.reliability ?? record.reliability,
-        secured: typeof change.secured === 'boolean' ? change.secured : record.secured,
+        // Discovery and custody are monotonic. Losing the physical object should
+        // be represented by custody/status, not by erasing knowledge or silently
+        // downgrading proof that was already recorded.
+        secured: record.secured || change.secured === true,
         discovered: typeof change.discovered === 'boolean'
-          ? change.discovered
+          ? (record.discovered !== false || change.discovered)
           : (record.discovered !== false),
         description: definition?.description ?? change.description ?? record.description,
         truths: definition?.truths ?? record.truths ?? [],
       });
       if (!existing) session.evidence.push(record);
-      accepted.push(record);
+      if (!existing || JSON.stringify(record) !== before) accepted.push(record);
     }
     return accepted;
   }
@@ -143,6 +147,8 @@ export class ScenarioProgressService {
     if (!catalog || typeof catalog !== 'object' || typeof userText !== 'string') return [];
     const text = userText.trim().toLowerCase();
     if (!text) return [];
+    const investigativeIntent = /检查|查看|观察|搜索|搜查|调查|翻找|比对|核对|询问|追问|记录|录音|拍照|保全|取得|拿走|检验|分析|inspect|examine|search|investigate|compare|question|record|preserve|secure/i;
+    if (!investigativeIntent.test(text)) return [];
     const currentLocationId = session.playerLocationId;
     const existingIds = new Set((session.evidence || [])
       .filter(evidence => evidence.discovered !== false)
@@ -196,9 +202,26 @@ export class ScenarioProgressService {
   canAcceptRecommendedEnding(session) {
     const lastPlayerMessage = [...(session.chatRecord || [])].reverse()
       .find(entry => entry?.role === 'player')?.content || '';
-    const playerMadeFinalChoice = /expose|publish|reveal|report|preserve|take (it|the evidence)|suppress|destroy|withdraw|leave|公开|揭露|公布|交给|带走|保全|封存|销毁|撤离|离开/i
-      .test(lastPlayerMessage);
-    return this.evaluateTruth(session).truthKnown && playerMadeFinalChoice;
+    const finalChoice = this.detectFinalChoice(lastPlayerMessage);
+    if (finalChoice) session.finalChoice = finalChoice;
+    return this.evaluateTruth(session).truthKnown && Boolean(finalChoice);
+  }
+
+  detectFinalChoice(text = '') {
+    const normalized = String(text).trim();
+    if (!normalized) return null;
+    // Questions, hypotheticals, and explicit negations are not commitments.
+    if (/[?？]|是否|要不要|如果|假如|考虑|should\s+i|what\s+if|whether|maybe|perhaps/i.test(normalized)) return null;
+    if (/不(?:会|要|想|打算|决定)?\s*(?:公开|揭露|公布|保全|封存|销毁|撤离|离开)|do\s+not|don't|won't|not\s+(?:publish|reveal|preserve|destroy|leave)/i.test(normalized)) return null;
+
+    const choices = [
+      { id: 'expose', pattern: /(?:我|玩家|最终决定|对应行动)[\s\S]{0,20}(?:公开|揭露|公布|发布|上报)|\bi\s+(?:will\s+|choose\s+to\s+|decide\s+to\s+)?(?:expose|publish|reveal|report)\b/i },
+      { id: 'preserve', pattern: /(?:我|玩家|最终决定|对应行动)[\s\S]{0,20}(?:保全|封存|带走|保存)|\bi\s+(?:will\s+|choose\s+to\s+|decide\s+to\s+)?(?:preserve|secure|take the evidence)\b/i },
+      { id: 'destroy', pattern: /(?:我|玩家|最终决定|对应行动)[\s\S]{0,20}(?:销毁|烧毁|毁掉)|\bi\s+(?:will\s+|choose\s+to\s+|decide\s+to\s+)?destroy\b/i },
+      { id: 'suppress', pattern: /(?:我|玩家|最终决定|对应行动)[\s\S]{0,20}(?:压下|隐瞒|掩盖)|\bi\s+(?:will\s+|choose\s+to\s+|decide\s+to\s+)?suppress\b/i },
+      { id: 'withdraw', pattern: /(?:我|玩家|最终决定|对应行动)[\s\S]{0,20}(?:撤离|离开白桦站|登车离开)|\bi\s+(?:will\s+|choose\s+to\s+|decide\s+to\s+)?(?:withdraw|leave the station)\b/i },
+    ];
+    return choices.find(choice => choice.pattern.test(normalized))?.id || null;
   }
 
   chooseEndingType(session, reason) {
@@ -207,9 +230,13 @@ export class ScenarioProgressService {
     if (player?.san <= 0) return 'madness';
 
     const truth = this.evaluateTruth(session);
-    if (truth.truthProvable) return 'truth_exposed';
+    if (session.finalChoice === 'expose' && truth.truthKnown) return 'truth_exposed';
+    if (session.finalChoice === 'preserve' && truth.truthKnown) return 'forbidden_cargo';
+    if ((session.finalChoice === 'destroy' || session.finalChoice === 'suppress') && truth.truthKnown) return 'truth_sunk';
+    if (session.finalChoice === 'withdraw') return 'withdrawal';
     if (session.suspicion >= 8) return 'suppressed';
     if (reason === 'deadline') return truth.truthKnown ? 'forbidden_cargo' : 'truth_sunk';
+    if (truth.truthProvable) return 'truth_exposed';
     return 'withdrawal';
   }
 }

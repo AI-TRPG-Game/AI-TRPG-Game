@@ -65,5 +65,8 @@ assert(r9.tens.length === 3, `2 奖励骰应有 3 个十位骰，实际=${r9.ten
 const r10 = dice.rollWithBonusPenalty(5, 0);
 assert(r10.tens.length === 3, `5 奖励骰应钳制为 2（共 3 个十位骰），实际=${r10.tens.length}`);
 
+// 0 技能值没有可用的基础成功率，01 也不能把必败检定翻成大成功。
+assert(dice.evaluateSuccess(0, 1) === '一般失败', '技能点 0 的 01 应保持失败，避免必败测试出现随机成功');
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
