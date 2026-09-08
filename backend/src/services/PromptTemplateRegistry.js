@@ -7,7 +7,7 @@ import { buildEntityReferenceRules } from '../domain/NarrativeSchema.js';
 // 2. 动态内容（世界观、角色状态等）放在 user message 中
 // 3. strict 模式下 schema 已强制字段结构，prompt 只描述语义，不重复 schema description
 // 4. 不教 LLM 如何转义（strict 模式服务端自动转义，prompt 提转义反而导致字面输出）
-const SYSTEM_PREFIX = `你是CoC7th规则下的KP兼文学剧本创作者。必须通过调用指定函数以JSON返回结果，不在函数调用之外输出任何文本。`;
+const SYSTEM_PREFIX = `你是CoC7th规则下的KP兼文学剧本创作者。除JSON字段名、实体ID和规则枚举值外，所有面向玩家的文字必须使用简体中文。必须通过调用指定函数以JSON返回结果，不在函数调用之外输出任何文本。`;
 
 // ── CoC7th 数值计算规则（CHARACTER_GEN / KEY_CHARACTER_GEN 共用） ──
 // 仅保留 schema 无法表达的公式和计算规则，范围约束由 schema minimum/maximum 强制
@@ -73,7 +73,9 @@ const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场npc填写数值，已存在的 npc 填 null（由系统管理）
+- NPC的精确HP、SAN、属性和规则状态是主持人信息，不得在narration、currentState或options中直接告诉玩家；只描述可观察的伤势与情绪。
 - current_location_id：本轮结束时玩家所在地点。新手试炼只能填写设定上下文中已发现的地点 id；未移动时保持当前地点 id。普通剧本填空字符串。
+- active_event_ack：若设定上下文含GM活动场景，必须填写其event_id与outcome，incorporated=true，并用perceived_consequence简述玩家在叙事中实际感知到的变化；没有活动场景时填null。该字段只供系统校验，不得写入面向玩家的文字。
 - actions与options互斥：
   - actions非空=触发判定（options填null），narration在判定点自然切断
   - actions为null=正常推进，${OPTIONS_RULE}
@@ -102,7 +104,9 @@ For an authored scenario, use a minimum 10-minute meaningful turn and include sa
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
 - npc.hp/san/maxHp/maxSan：仅首次出场时填写数值，已存在的 npc 填 null（由系统管理）
+- NPC的精确HP、SAN、属性和规则状态是主持人信息，不得在narration、currentState或options中直接告诉玩家；只描述可观察的伤势与情绪。
 - current_location_id：本轮结束时玩家所在地点；新手试炼只能填写已发现地点 id，未移动时保持当前地点 id。
+- active_event_ack：若设定上下文含GM活动场景，必须确认同一event_id与outcome且incorporated=true，并说明检定后叙事中的可感知后果；没有活动场景时填null。不得向玩家显示该字段。
 - actions与options互斥：
   - actions非空=递归检定（options填null）
   - actions为null=正常推进，${OPTIONS_RULE}
@@ -114,9 +118,14 @@ const SUMMARY_INSTRUCTION = `${SYSTEM_PREFIX}
 - summary：800-1000字`;
 
 const ENDING_GEN_INSTRUCTION = `${SYSTEM_PREFIX}
-任务：根据完整状态生成RPG风格结局与独立的主持人复盘。
+任务：根据完整状态生成已经完成、没有悬而未决行动的RPG结局与独立主持人复盘。
 - ending_type：truth_exposed/forbidden_cargo/truth_sunk/suppressed/withdrawal/death/madness/custom；HP/SAN归零时优先death或madness。
-- ending_text：文学性结局，100-300字。
+- ending_title：明确的中文结局名称。
+- immediate_resolution：明确解决最后一场危险、追逐或对抗，不能停在攻击即将发生或仍需玩家选择的位置。
+- player_outcome：说明主角是否生还、如何离开、付出何种代价以及之后的处境。
+- character_outcomes：为上下文指定的每名相关角色填写npc_id、姓名和明确去向。
+- truth_outcome：说明真相与证据最终如何处置。
+- ending_text：300-600字的文学性收束，必须与上述结构一致。禁止使用“故事才刚刚开始”“未完待续”或暗示本局仍未结束的措辞。
 - debrief：含剧透，说明隐藏真相、重要事件、实际使用的证据、错过线索与下次可尝试的行动。`;
 
 // ── temperature / max_tokens 配置 ──
@@ -173,10 +182,9 @@ export const FLOW_REASONING_EFFORT = {
   [FlowType.ENDING_GEN]: 'high',
 };
 
-// ── 模型路由（D18 分层模型路由） ──
-// 官方文档：deepseek-v4-pro（500 并发，3 元/百万输入）vs deepseek-v4-flash（2500 并发，1 元/百万输入）
-// 策略：高质量叙事/规则判定 → pro；高频低复杂度 → flash
-// 注意：null 表示使用 .env 中 LLM_MODEL 默认值
+// ── 模型路由 ──
+// null 表示使用 .env 中 LLM_MODEL 默认值。不要在这里硬编码某个厂商的
+// 模型名：SoCLaaS 与其他 OpenAI-compatible 服务各自维护可用模型目录。
 export const FLOW_MODEL = {
   [FlowType.WORLD_GEN]: null,             // 世界观创作 → pro（默认）
   [FlowType.CHARACTER_GEN]: null,          // 数值计算 → pro
@@ -184,7 +192,7 @@ export const FLOW_MODEL = {
   [FlowType.STORY_OPENING]: null,         // 开场叙事 → pro
   [FlowType.NARRATION_I]: null,           // 核心叙事 → pro
   [FlowType.NARRATION_II]: null,          // 核心叙事 → pro
-  [FlowType.HISTORY_SUMMARY]: 'deepseek-v4-flash',  // 摘要任务 → flash（降本 2/3）
+  [FlowType.HISTORY_SUMMARY]: null,             // 摘要任务 → 使用默认模型
   [FlowType.ENDING_GEN]: null,            // 结局生成 → pro（默认）
 };
 

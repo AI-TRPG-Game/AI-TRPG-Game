@@ -1,18 +1,16 @@
 import { apiClient } from '../api/ApiClient.js';
 import { sessionStore } from '../persistence/SessionStore.js';
+import {
+  getNpcCondition,
+  getSanLabel,
+  getScenarioPhaseLabel,
+  getSuspicionDisplay,
+} from './ScenarioPresentation.mjs';
 
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
-}
-
-function getSuspicionDisplay(value = 0) {
-  const safe = Math.max(0, Math.min(10, Number(value) || 0));
-  if (safe >= 8) return { label: '危机', effect: '对手可能公开阻挠或抢夺证据' };
-  if (safe >= 6) return { label: '受阻', effect: '嫌疑人会限制行动或转移证据' };
-  if (safe >= 3) return { label: '被监视', effect: '调查行动通常额外耗时5分钟' };
-  return { label: '未引起注意', effect: '暂未引起有组织的注意' };
 }
 
 // 旧数据兼容：将 LLM raw 输出渲染为带分隔线的 HTML
@@ -1100,7 +1098,7 @@ export class GameUIController {
       ).length;
       const suspicion = Number(this.session.suspicion) || 0;
       const suspicionState = getSuspicionDisplay(suspicion);
-      this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${clock.phase} · 证据 ${secured}/${evidenceTotal}（已发现${discovered}） · 真相 ${provenFacts}/${Object.keys(truths).length} · 怀疑 ${suspicion}/10（${suspicionState.label}）`;
+      this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${getScenarioPhaseLabel(clock.phase)} · 证据 ${secured}/${evidenceTotal}（已发现${discovered}） · 真相 ${provenFacts}/${Object.keys(truths).length} · 怀疑 ${suspicion}/10（${suspicionState.label}）`;
       this.scenarioStatus.title = `调查证据分为“已发现”和“已保全”；已保全证据才能支撑结局。怀疑度${suspicion}/10：${suspicionState.effect}。`;
     } else {
       // 普通自由剧本没有剧本时钟；明确告知入口，避免把空白状态误认为显示故障。
@@ -1212,8 +1210,9 @@ export class GameUIController {
   /**
    * 渲染角色 HP/SAN/属性 状态栏。
    * - departed：显示"已退场"
-   * - hidden：HP/SAN/属性全部显示 ??（已隐藏）
-   * - 正常：显示 HP/SAN，key 角色额外显示 8 大属性
+   * - hidden：不显示在普通 NPC 列表
+   * - 主角：显示精确 HP/SAN 和属性
+   * - 可见 NPC：只显示可观察的伤势与精神状态
    */
   _renderCharacterStatus() {
     if (!this.characterStatusPanel && !this.playerStatusPanel) return;
@@ -1239,29 +1238,30 @@ export class GameUIController {
         </div>`;
       }
 
-      // hidden 的 NPC：HP/SAN/属性全部隐藏
+      // hidden 的 NPC：全部规则状态隐藏
       if (npc.visibility === 'hidden') {
         return `<div class="char-status-item hidden">
           <span class="char-name">${escapeHtml(label)}</span>
-          <span class="char-hp-san">HP ??/?? | SAN ??/??（已隐藏）</span>
+          <span class="char-hp-san">状态未知（尚未露面）</span>
         </div>`;
       }
 
-      // 正常显示
-      const hpStr = npc.hp != null ? `${npc.hp}/${npc.maxHp ?? '?'}` : '?';
-      const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
-      let line = `HP ${escapeHtml(hpStr)} | SAN ${escapeHtml(sanStr)}`;
-      if (npc.id === 'npc_000' && npc.san != null) {
-        const sanState = npc.san >= 51 ? 'stable' : npc.san >= 46 ? 'uneasy' : npc.san >= 31 ? 'shaken' : npc.san >= 16 ? 'unstable' : npc.san > 0 ? 'critical' : 'madness';
-        line += ` | ${sanState}`;
+      // 主角显示精确规则值；NPC 只显示可观察的定性状态。
+      let line;
+      if (npc.id === 'npc_000' || npc.importance === 'player') {
+        const hpStr = npc.hp != null ? `${npc.hp}/${npc.maxHp ?? '?'}` : '?';
+        const sanStr = npc.san != null ? `${npc.san}/${npc.maxSan ?? '?'}` : '?';
+        line = `HP ${escapeHtml(hpStr)} | SAN ${escapeHtml(sanStr)} | ${escapeHtml(getSanLabel(npc.san))}`;
         const trauma = this.session?.sanity?.activeTrauma;
         if (trauma?.label) line += ` | 创伤：${trauma.label}`;
-      }
-      if (npc.attributes) {
-        const attrStr = Object.entries(npc.attributes)
-          .map(([k, v]) => `${k}${v}`)
-          .join(' ');
-        line += `<div class="char-attrs">${escapeHtml(attrStr)}</div>`;
+        if (npc.attributes) {
+          const attrStr = Object.entries(npc.attributes)
+            .map(([k, v]) => `${k}${v}`)
+            .join(' ');
+          line += `<div class="char-attrs">${escapeHtml(attrStr)}</div>`;
+        }
+      } else {
+        line = escapeHtml(getNpcCondition(npc));
       }
       return `<div class="char-status-item">
         <span class="char-name">${escapeHtml(label)}</span>
@@ -1291,6 +1291,8 @@ export class GameUIController {
     const subState = this.session?.subState;
 
     if (subState === 'RESTART_PENDING') {
+      this.selectedOptions.clear();
+      this.optionsBar.innerHTML = '';
       // 仅在尚未渲染重启面板时渲染（避免重复）
       if (!document.getElementById('restart-options')) {
         this._renderRestartOptions();
@@ -1768,7 +1770,7 @@ export class GameUIController {
   _renderOptionButtons() {
     this.optionsBar.innerHTML = '';
     const buffer = this.session?.optionBuffer;
-    if (!buffer || this.session.phase !== 'STORY_PLAY') return;
+    if (!buffer || this.session.phase !== 'STORY_PLAY' || this.session.subState !== 'AWAITING_INPUT') return;
 
     for (const letter of ['A', 'B', 'C', 'D']) {
       const btn = document.createElement('button');

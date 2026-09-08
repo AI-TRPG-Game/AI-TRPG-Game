@@ -37,6 +37,9 @@ export class GameSession {
     this.scenarioId = data.scenarioId ?? null;
     this.scenarioRules = data.scenarioRules ?? null;
     this.scenarioClock = data.scenarioClock ?? null;
+    if (this.scenarioClock && !['normal', 'finale'].includes(this.scenarioClock.mode)) {
+      this.scenarioClock.mode = 'normal';
+    }
     this.playerLocationId = data.playerLocationId ?? null;
     this.sanity = data.sanity ?? null;
     this.scheduledEvents = Array.isArray(data.scheduledEvents) ? data.scheduledEvents : [];
@@ -49,6 +52,7 @@ export class GameSession {
     this.combat = data.combat ?? null;
     this.finalChoice = data.finalChoice ?? null;
     this.endingState = data.endingState ?? null;
+    this.finaleState = data.finaleState ?? null;
     this.createdAt = data.createdAt ?? new Date().toISOString();
     this.updatedAt = data.updatedAt ?? new Date().toISOString();
 
@@ -172,12 +176,28 @@ export class GameSession {
     this.scheduledEvents = (this.scheduledEvents || []).map(event => {
       const authored = scheduledById.get(event.id);
       const merged = authored
-        ? { ...authored, ...event, revealsLocations: event.revealsLocations ?? authored.revealsLocations ?? [] }
+        ? {
+          ...authored,
+          ...event,
+          branches: Object.fromEntries(Object.entries(authored.branches || {}).map(([key, branch]) => [
+            key,
+            { ...branch, ...(event.branches?.[key] || {}) },
+          ])),
+          revealsLocations: event.revealsLocations ?? authored.revealsLocations ?? [],
+        }
         : event;
       if (!event.status) merged.status = event.fired ? 'resolved' : (authored?.status || 'dormant');
       if (merged.revealed === undefined) merged.revealed = Boolean(event.fired);
       return merged;
     });
+    if (this.activeScene && !this.activeScene.playerCue) {
+      const activeEvent = this.scheduledEvents.find(event => event.id === this.activeScene.eventId);
+      const activeBranch = activeEvent?.branches?.[this.activeScene.branchKey]
+        || activeEvent?.branches?.foreground;
+      this.activeScene.playerCue = this.activeScene.kind === 'aftermath'
+        ? (activeEvent?.aftermathPlayerCue || activeBranch?.aftermathPlayerCue)
+        : activeBranch?.playerCue;
+    }
 
     if (!Array.isArray(this.locations)) this.locations = [];
     for (const initialLocation of BIRCH_STATION_TUTORIAL.locations || []) {
@@ -286,6 +306,7 @@ export class GameSession {
       combat: this.combat,
       finalChoice: this.finalChoice,
       endingState: this.endingState,
+      finaleState: this.finaleState,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

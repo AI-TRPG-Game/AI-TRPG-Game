@@ -82,6 +82,13 @@ export class EndingService {
     // 4. 重置状态
     session.phase = Phase.STORY_PLAY;
     session.subState = SubState.AWAITING_INPUT;
+    session.optionBuffer = '';
+    session.pendingDiceFlow = null;
+    session.activeScene = null;
+    session.combat = null;
+    session.finalChoice = null;
+    session.endingState = null;
+    session.finaleState = null;
 
     // 5. 注入故事开幕消息
     this.injectStoryOpeningMessages(session);

@@ -72,8 +72,11 @@ function makeSession(eventIds, currentTime, playerLocationId) {
   const remote = makeSession('records_0240', '02:40', 'loc_001');
   prep = service.prepareTurn(remote);
   const event = remote.scheduledEvents[0];
-  assert(!prep.activeScene && event.outcome === 'records_partially_destroyed', 'remote record destruction should resolve off-screen without a player announcement');
-  assert(event.revealed === false && remote.scenarioFlags.records_partially_destroyed, 'off-screen outcome should update private world state');
+  assert(prep.activeScene?.branchKey === 'absent', 'remote record destruction should immediately stage a perceptible consequence');
+  assert(prep.activeScene.playerCue.includes('焦纸味') && prep.activeScene.resolutionLocationId === 'loc_006', 'remote consequence should be observable while preserving the true event location');
+  service.commitActiveScene(remote);
+  assert(event.outcome === 'records_partially_destroyed' && event.revealed === false, 'remote consequence should update private world state and preserve an unrevealed aftermath');
+  assert(remote.scenarioFlags.records_partially_destroyed, 'remote event branch flags should be committed after narration');
   remote.playerLocationId = 'loc_006';
   prep = service.prepareTurn(remote, { userText: '我进入站务办公室' });
   assert(prep.activeScene?.kind === 'aftermath', 'later office entry should expose the record-destruction aftermath');
@@ -99,10 +102,23 @@ function makeSession(eventIds, currentTime, playerLocationId) {
 
   const expired = makeSession('confession_0310', '04:11', 'loc_001');
   prep = service.prepareTurn(expired);
-  assert(!prep.activeScene && expired.scheduledEvents[0].status === 'expired', 'missed confession window should resolve to a fallback instead of blocking the plot');
+  assert(prep.activeScene?.branchKey === 'expired', 'missed confession window should immediately stage a perceptible consequence');
+  service.commitActiveScene(expired);
+  assert(expired.scheduledEvents[0].status === 'expired' && expired.scheduledEvents[0].revealed === false, 'expired confession should commit while retaining a hidden aftermath');
   expired.playerLocationId = 'loc_008';
   prep = service.prepareTurn(expired);
   assert(prep.activeScene?.kind === 'aftermath', 'expired confession should leave a discoverable fallback hint');
+}
+
+// Every authored branch must provide a Chinese player-facing cue, including
+// missed/off-screen outcomes, so retry exhaustion can never erase an event.
+{
+  for (const event of definition.scheduledEvents) {
+    for (const [branchKey, branch] of Object.entries(event.branches || {})) {
+      assert(typeof branch.playerCue === 'string' && branch.playerCue.trim(), `${event.id}/${branchKey} should define playerCue`);
+      assert(/[\u3400-\u9fff]/.test(branch.playerCue), `${event.id}/${branchKey} playerCue should be Chinese`);
+    }
+  }
 }
 
 // The seizure follows the protagonist and starts an objective-based conflict.

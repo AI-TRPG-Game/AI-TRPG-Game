@@ -89,6 +89,7 @@ export class NecessarySettingsBuilder {
         lines.push('==== GM-ONLY ACTIVE SCENE DIRECTIVE (highest priority for this turn) ====');
         lines.push(`Scene kind: ${session.activeScene.kind}; event=${session.activeScene.eventId}; outcome=${session.activeScene.outcome || 'pending'}; location=${sceneLocation?.name || session.activeScene.locationId || 'current location'}.`);
         lines.push(session.activeScene.instruction);
+        if (session.activeScene.playerCue) lines.push(`玩家至少必须感知到这一变化：${session.activeScene.playerCue}`);
         lines.push('Integrate this development into the narration itself. Show only what the protagonist can perceive. Do not print event IDs, branch names, scheduler metadata, or a separate system-event announcement. If it interrupts the declared action, make the interruption clear and stop at the next meaningful player decision.');
       }
       const activeTrauma = session.sanity?.activeTrauma;

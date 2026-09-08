@@ -21,7 +21,9 @@ import {
   TARGET, ATTR_FIELD, DICE_COUNT, DICE_SIDES, DICE_BONUS, EFFECT,
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
   ON_CRITICAL_SUCCESS, ON_CRITICAL_FAILURE,
-  ENDING_TYPE, ENDING_TEXT, CURRENT_LOCATION_ID,
+  ENDING_TYPE, ENDING_TITLE, ENDING_TEXT, IMMEDIATE_RESOLUTION,
+  PLAYER_OUTCOME, CHARACTER_OUTCOMES, TRUTH_OUTCOME, CURRENT_LOCATION_ID,
+  ACTIVE_EVENT_ACK,
 } from '../domain/NarrativeSchema.js';
 import {
   CARD_KEY, NAME, AGE, GENDER, OCCUPATION, PERSONALITY, PORTRAIT,
@@ -377,6 +379,23 @@ export function buildNarrationStrictSchema() {
         required: ['should_end', 'reason'], additionalProperties: false,
       },
       [CURRENT_LOCATION_ID]: { type: 'string', description: '玩家在本次叙事结束时所在的已发现地点 ID；未移动或普通剧本填空字符串。' },
+      [ACTIVE_EVENT_ACK]: {
+        anyOf: [
+          {
+            type: 'object',
+            properties: {
+              event_id: { type: 'string' },
+              outcome: { type: 'string' },
+              incorporated: { type: 'boolean' },
+              perceived_consequence: { type: 'string' },
+            },
+            required: ['event_id', 'outcome', 'incorporated', 'perceived_consequence'],
+            additionalProperties: false,
+          },
+          { type: 'null' },
+        ],
+        description: '当前存在GM活动场景时确认已写入叙事，否则填null。此字段不面向玩家显示。',
+      },
     },
     // DeepSeek strict tools 要求 required 与 properties 完全一致；
     // 对普通剧本，新增剧本字段使用中性值而非省略。
@@ -384,7 +403,7 @@ export function buildNarrationStrictSchema() {
       NARRATION, LOCATIONS, NPCS, ITEMS, ACTIONS, OPTIONS,
       'time_cost_minutes', 'time_cost_rationale', 'evidence_changes',
       'suspicion_delta', 'combat_update', 'ending_recommendation',
-      CURRENT_LOCATION_ID,
+      CURRENT_LOCATION_ID, ACTIVE_EVENT_ACK,
     ],
     additionalProperties: false,
   };
@@ -415,6 +434,23 @@ const endingGenStrictSchema = {
       type: 'string',
       description: 'RPG 风格结局文本，如"达成 XXX 结局"。只描述结局，不提重新开始选项',
     },
+    [ENDING_TITLE]: { type: 'string', description: '明确的中文结局名称' },
+    [IMMEDIATE_RESOLUTION]: { type: 'string', description: '明确说明结局前最后一场危险或冲突如何结束' },
+    [PLAYER_OUTCOME]: { type: 'string', description: '明确说明主角最终的生还、离开、代价与后续处境' },
+    [CHARACTER_OUTCOMES]: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          npc_id: { type: 'string' },
+          name: { type: 'string' },
+          outcome: { type: 'string' },
+        },
+        required: ['npc_id', 'name', 'outcome'],
+        additionalProperties: false,
+      },
+    },
+    [TRUTH_OUTCOME]: { type: 'string', description: '明确说明真相与证据最终被公开、保全、销毁、压下或遗失' },
     debrief: {
       type: 'object',
       properties: {
@@ -424,7 +460,10 @@ const endingGenStrictSchema = {
       required: ['hidden_plot', 'important_events', 'evidence_used', 'missed_leads', 'next_try'], additionalProperties: false,
     },
   },
-  required: [ENDING_TYPE, ENDING_TEXT, 'debrief'],
+  required: [
+    ENDING_TYPE, ENDING_TITLE, IMMEDIATE_RESOLUTION, PLAYER_OUTCOME,
+    CHARACTER_OUTCOMES, TRUTH_OUTCOME, ENDING_TEXT, 'debrief',
+  ],
   additionalProperties: false,
 };
 

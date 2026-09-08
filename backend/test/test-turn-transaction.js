@@ -59,20 +59,38 @@ assert(restored.scheduledEvents[0].status === 'dormant' && !restored.activeScene
 assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel should restore scenario flags and deliberately clear stale choices');
 
 // A confirmed check must receive its NARRATION_II result before a crossed
-// deadline triggers ENDING_GEN. This guards the old ordering that swallowed the
-// promised roll/follow-up as soon as the clock reached 06:00.
+// deadline enters the finale gate. Active danger continues at a frozen 06:00;
+// only a later explicit final choice is allowed to start ENDING_GEN.
 {
   const calls = [];
-  const narrativeResult = JSON.stringify({
-    narration: '检定已经完成，行动后果在这里落定。',
+  const activeEventNarration = JSON.stringify({
+    narration: '检定已经完成，行动后果在这里落定，但眼前的对手仍在逼近。',
     locations: [], npcs: [], items: [], actions: null,
     options: ['A. 处理证据', 'B. 登车', 'C. 留下', 'D. 自由行动'],
     time_cost_minutes: 0, time_cost_rationale: '', evidence_changes: [],
-    suspicion_delta: 0, combat_update: null,
+    suspicion_delta: 0,
+    combat_update: { active: true, round: 2, objective: '摆脱围堵', exitConditions: ['成功撤离'], participants: ['npc_000'] },
     ending_recommendation: { should_end: false, reason: '' }, current_location_id: 'loc_001',
+    active_event_ack: { event_id: 'last_action_event', outcome: 'last_action', incorporated: true, perceived_consequence: '对手仍在逼近。' },
+  });
+  const resolvedDangerNarration = JSON.stringify({
+    narration: '你借着汽笛声摆脱围堵，眼前的直接危险终于结束。',
+    locations: [], npcs: [], items: [], actions: null,
+    options: ['A. 继续调查', 'B. 查看车站', 'C. 休息', 'D. 自由行动'],
+    time_cost_minutes: 30, time_cost_rationale: '突破围堵', evidence_changes: [],
+    suspicion_delta: 0,
+    combat_update: { active: false, round: 2, objective: '摆脱围堵', exitConditions: ['成功撤离'], participants: ['npc_000'] },
+    ending_recommendation: { should_end: true, reason: '普通模型试图结束' }, current_location_id: 'loc_001',
+    active_event_ack: null,
   });
   const endingResult = JSON.stringify({
-    ending_type: 'truth_sunk', ending_text: '钟声压过雨声，本次调查结束。', player_choice: '',
+    ending_type: 'truth_sunk',
+    ending_title: '灰烬中的名字',
+    immediate_resolution: '你已经摆脱最后的围堵，并在列车启动前作出选择。',
+    player_outcome: '你带着伤势登上列车，幸存下来，但不得不承受沉默的代价。',
+    character_outcomes: [],
+    truth_outcome: '名单被烧毁，本局中的真相无法公开。',
+    ending_text: '钟声压过雨声，本次调查明确结束。',
     debrief: { hidden_plot: '', important_events: [], evidence_used: [], missed_leads: [], next_try: '' },
   });
   const provider = {
@@ -80,7 +98,9 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
     async generate(assembled) {
       calls.push(assembled.flowType);
       return {
-        content: assembled.flowType === 'ENDING_GEN' ? endingResult : narrativeResult,
+        content: assembled.flowType === 'ENDING_GEN'
+          ? endingResult
+          : (assembled.flowType === 'NARRATION_II' ? activeEventNarration : resolvedDangerNarration),
         reasoningContent: null,
         thinkingEnabled: false,
         hasToolCall: true,
@@ -94,10 +114,11 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
     displayLog: [], locations: [{ id: 'loc_001', name: '站台', description: '' }],
     npcs: [{ id: 'npc_000', name: '玩家', importance: 'player', locationId: 'loc_001', hp: 10, maxHp: 10, san: 50, maxSan: 50, visibility: 'visible', status: 'active', attributes: null }],
     scenarioId: 'test', scenarioRules: { time: { minimumMinutes: 10, maximumMinutes: 60 }, truths: {} },
-    scenarioClock: { currentTime: '05:55', deadline: '06:00', turn: 10, phase: 'aftermath' },
+    scenarioClock: { currentTime: '05:35', deadline: '06:00', turn: 10, phase: 'aftermath', mode: 'normal' },
     playerLocationId: 'loc_001', evidence: [], suspicion: 0, scenarioFlags: {},
     scheduledEvents: [{ id: 'last_action_event', at: '05:50', placement: { mode: 'global' }, branches: { foreground: { outcome: 'last_action' } }, status: 'queued', fired: false }],
-    activeScene: { kind: 'foreground', eventId: 'last_action_event', branchKey: 'foreground', outcome: 'last_action', locationId: 'loc_001' },
+    activeScene: { kind: 'foreground', eventId: 'last_action_event', branchKey: 'foreground', outcome: 'last_action', locationId: 'loc_001', playerCue: '对手仍在逼近。' },
+    combat: { active: true, round: 1, objective: '摆脱围堵', exitConditions: ['成功撤离'], participants: ['npc_000'] },
     pendingDiceFlow: {
       actions: [{ type: 'direct', trigger: 'others', changes: [] }],
       pendingRaw: JSON.stringify({
@@ -108,35 +129,67 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
         ending_recommendation: { should_end: false, reason: '' }, current_location_id: 'loc_001',
       }),
       sourceFlowType: 'NARRATION_I', dialogStage: 'A_CONFIRM', hasS: false,
-      turnRuling: { time_cost_minutes: 10, time_cost_rationale: '最后行动耗时', current_location_id: 'loc_001' },
+      turnRuling: { time_cost_minutes: 25, time_cost_rationale: '最后行动耗时', current_location_id: 'loc_001' },
     },
   });
-  const directDeadlineSeed = deadlineSession.toJSON();
   const deadlineRepo = new RequestSessionRepository(deadlineSession.toJSON());
   const deadlineOrchestrator = new GameOrchestrator({ repository: deadlineRepo, llmProvider: provider });
-  const response = await deadlineOrchestrator.confirmDice(deadlineSession.id);
-  assert(calls.join(',') === 'NARRATION_II,ENDING_GEN', 'deadline should be evaluated only after the post-roll narration');
-  assert(response.session.scenarioClock.currentTime === '06:00', 'completed roll turn should advance the clock to the deadline');
-  assert(response.session.scheduledEvents[0].status === 'resolved', 'active event should commit before the ending is generated');
-  assert(response.result.endingTriggered && response.session.subState === 'RESTART_PENDING', 'deadline should still produce a completed ending after the turn resolves');
+  let response = await deadlineOrchestrator.confirmDice(deadlineSession.id);
+  assert(calls.join(',') === 'NARRATION_II', 'deadline should not invoke ending generation after the post-roll narration');
+  assert(response.session.scenarioClock.currentTime === '06:00' && response.session.scenarioClock.mode === 'finale', 'completed roll turn should freeze the clock at the deadline');
+  assert(response.session.scheduledEvents[0].status === 'resolved', 'active event should commit before the finale gate');
+  assert(response.session.finaleState.stage === 'resolve_scene' && response.session.subState === 'AWAITING_INPUT', 'active combat should remain playable at the finale gate');
+  assert(response.session.optionBuffer.includes('处理证据'), 'combat-stage ordinary actions should remain until danger is resolved');
   assert(
-    response.result.refinedHtml.includes('检定已经完成') && response.result.refinedHtml.includes('钟声压过雨声'),
-    'live deadline response should show the resolved action before the ending'
+    response.result.refinedHtml.includes('检定已经完成') && !response.result.refinedHtml.includes('结局：'),
+    'deadline response should show the resolved action without an ending card'
   );
 
-  directDeadlineSeed.id = 'direct-deadline-turn';
-  directDeadlineSeed.subState = 'AWAITING_INPUT';
-  directDeadlineSeed.pendingDiceFlow = null;
-  directDeadlineSeed.chatRecord = [];
-  directDeadlineSeed.displayLog = [];
-  const directRepo = new RequestSessionRepository(directDeadlineSeed);
-  const directOrchestrator = new GameOrchestrator({ repository: directRepo, llmProvider: provider });
-  const directResponse = await directOrchestrator.handleMessage(directDeadlineSeed.id, '执行最后一次无需检定的行动');
-  assert(directResponse.session?.subState === 'RESTART_PENDING', 'direct deadline turn should preserve the normal response envelope');
+  response = await deadlineOrchestrator.handleMessage(deadlineSession.id, '我借汽笛声摆脱围堵');
+  assert(calls.join(',') === 'NARRATION_II,NARRATION_I', 'resolving finale combat should use normal narration without ending generation');
+  assert(response.session.scenarioClock.currentTime === '06:00', 'combat resolution in finale mode should cost no clock time');
+  assert(response.session.finaleState.stage === 'decision' && response.session.optionBuffer.includes('最终决定：公开真相'), 'resolved danger should replace ordinary options with server-authored final choices');
+  assert(!response.result.refinedHtml.includes('继续调查'), 'ordinary model-generated options should be removed once the finale decision activates');
+
+  response = await deadlineOrchestrator.handleMessage(deadlineSession.id, '我还没想好');
+  assert(calls.join(',') === 'NARRATION_II,NARRATION_I', 'ambiguous finale text should not call the model');
+  assert(response.session.finaleState.stage === 'decision' && response.session.subState === 'AWAITING_INPUT', 'ambiguous finale text should re-present the decision stage');
+
+  response = await deadlineOrchestrator.handleMessage(deadlineSession.id, '选项C');
+  assert(calls.join(',') === 'NARRATION_II,NARRATION_I,ENDING_GEN', 'only an explicit final choice should invoke ending generation');
+  assert(response.session.subState === 'RESTART_PENDING' && response.session.finaleState.stage === 'complete', 'valid finale choice should produce a completed ending');
+  assert(response.session.optionBuffer === '' && response.session.pendingDiceFlow === null && response.session.combat === null, 'ending generation should clear ordinary controls and pending danger state');
   assert(
-    directResponse.result.refinedHtml.includes('检定已经完成') && directResponse.result.refinedHtml.includes('钟声压过雨声'),
-    'direct deadline response should show turn narration before the ending'
+    response.result.refinedHtml.includes('【结局：灰烬中的名字】')
+      && response.result.refinedHtml.includes('真相与证据')
+      && response.result.refinedHtml.includes('主持人复盘（含剧透）'),
+    'structured ending should render a conclusive card followed by a spoiler debrief'
   );
+
+  const noCombatSeed = deadlineSession.toJSON();
+  noCombatSeed.id = 'direct-deadline-turn';
+  noCombatSeed.subState = 'AWAITING_INPUT';
+  noCombatSeed.pendingDiceFlow = null;
+  noCombatSeed.chatRecord = [];
+  noCombatSeed.displayLog = [];
+  noCombatSeed.activeScene = null;
+  noCombatSeed.scheduledEvents = [];
+  noCombatSeed.combat = null;
+  noCombatSeed.scenarioClock = { currentTime: '05:55', deadline: '06:00', turn: 10, phase: 'aftermath', mode: 'normal' };
+  const noCombatCalls = [];
+  const noCombatProvider = {
+    model: 'test-model',
+    async generate(assembled) {
+      noCombatCalls.push(assembled.flowType);
+      return { content: resolvedDangerNarration, reasoningContent: null, thinkingEnabled: false, hasToolCall: true };
+    },
+  };
+  const directRepo = new RequestSessionRepository(noCombatSeed);
+  const directOrchestrator = new GameOrchestrator({ repository: directRepo, llmProvider: noCombatProvider });
+  const directResponse = await directOrchestrator.handleMessage(noCombatSeed.id, '执行最后一次无需检定的行动');
+  assert(noCombatCalls.join(',') === 'NARRATION_I', 'no-combat deadline turn should not invoke ending generation');
+  assert(directResponse.session.finaleState.stage === 'decision' && directResponse.session.optionBuffer.includes('最终决定'), 'no-combat deadline should enter the decision stage immediately');
+  assert(!directResponse.result.refinedHtml.includes('继续调查'), 'no-combat deadline should discard ordinary model options immediately');
 }
 
 console.log(`${passed} passed`);

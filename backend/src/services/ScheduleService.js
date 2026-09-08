@@ -31,6 +31,9 @@ export class ScheduleService {
     }
 
     this._normalizeEvents(session);
+    if (session.scenarioClock.mode === 'finale' && !session.activeScene) {
+      return { activeScene: null, intendedLocationId: null, resolvedOffscreenEvents: [] };
+    }
     this._promoteEligibleEvents(session);
 
     if (session.activeScene) {
@@ -76,7 +79,8 @@ export class ScheduleService {
         event,
         decision.branchKey,
         decision.locationId,
-        intendedLocationId
+        intendedLocationId,
+        decision.resolutionLocationId
       );
       break;
     }
@@ -112,7 +116,7 @@ export class ScheduleService {
 
     const resolution = this._resolveEvent(session, event, scene.branchKey, {
       visible: true,
-      locationId: scene.locationId,
+      locationId: scene.resolutionLocationId || scene.locationId,
     });
     session.activeScene = null;
     return resolution;
@@ -123,6 +127,21 @@ export class ScheduleService {
     if (!session.scenarioClock) return { advanced: false, firedEvents: [], newlyEligibleEvents: [] };
 
     this._normalizeEvents(session);
+    if (session.scenarioClock.mode === 'finale') {
+      session.scenarioClock.turn = (session.scenarioClock.turn || 0) + 1;
+      return {
+        advanced: false,
+        cost: 0,
+        currentTime: session.scenarioClock.currentTime,
+        deadlineReached: false,
+        firedEvents: [],
+        newlyEligibleEvents: [],
+        revealedLocations: [],
+        suspicionState: scenarioProgressService.getSuspicionState(session.suspicion),
+        obstructionCost: 0,
+        traumaCost: 0,
+      };
+    }
     const previous = toMinutes(session.scenarioClock.currentTime) ?? 0;
     const deadline = toMinutes(session.scenarioClock.deadline) ?? previous;
     const requested = Number(parsed.time_cost_minutes);
@@ -282,6 +301,7 @@ export class ScheduleService {
       intendedLocationId,
       outcome: event.outcome,
       instruction: event.aftermathInstruction,
+      playerCue: event.aftermathPlayerCue || '你抵达现场后，发现这里留下了无法忽视的变化与线索。',
       revealsLocations: clone(event.pendingRevealLocations || []),
       preparedAt: new Date().toISOString(),
     };
@@ -315,11 +335,17 @@ export class ScheduleService {
     }
 
     if (event.absencePolicy === 'defer' && !expired) return { kind: 'defer' };
-    return {
-      kind: 'offscreen',
-      branchKey: expired && event.branches?.expired ? 'expired' : 'absent',
-      locationId: eventLocationId,
-    };
+    const branchKey = expired && event.branches?.expired ? 'expired' : 'absent';
+    const branch = event.branches?.[branchKey] || {};
+    if (branch.playerCue) {
+      return {
+        kind: 'foreground',
+        branchKey,
+        locationId: effectiveLocationId,
+        resolutionLocationId: eventLocationId,
+      };
+    }
+    return { kind: 'offscreen', branchKey, locationId: eventLocationId };
   }
 
   _areAdjacent(session, fromId, toId) {
@@ -328,7 +354,7 @@ export class ScheduleService {
     return Array.isArray(graph[fromId]) && graph[fromId].includes(toId);
   }
 
-  _buildForegroundScene(event, branchKey, locationId, intendedLocationId) {
+  _buildForegroundScene(event, branchKey, locationId, intendedLocationId, resolutionLocationId = null) {
     const branch = event.branches?.[branchKey] || event.branches?.foreground || {};
     return {
       kind: 'foreground',
@@ -336,8 +362,10 @@ export class ScheduleService {
       branchKey,
       outcome: branch.outcome || branchKey,
       locationId,
+      resolutionLocationId,
       intendedLocationId,
       instruction: branch.instruction || event.text || '把这一事件自然地编入当前场景。',
+      playerCue: branch.playerCue || '周围的局势突然发生变化，迫使你立刻作出回应。',
       preparedAt: new Date().toISOString(),
     };
   }
@@ -355,6 +383,7 @@ export class ScheduleService {
       || null;
     event.revealed = Boolean(visible) && !branch.leavesAftermath;
     event.aftermathInstruction = event.revealed ? null : (branch.aftermathInstruction || null);
+    event.aftermathPlayerCue = event.revealed ? null : (branch.aftermathPlayerCue || null);
     event.pendingRevealLocations = clone(branch.revealsLocations || event.revealsLocations || []);
 
     this._applyBranchConsequences(session, branch, event.resolutionLocationId);

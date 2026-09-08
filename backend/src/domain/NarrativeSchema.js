@@ -84,7 +84,12 @@ export const BRANCH_B_SANCHECK_AWAITING = 'B_SANCHECK_AWAITING';
 
 // 结局字段常量
 export const ENDING_TYPE = 'ending_type';
+export const ENDING_TITLE = 'ending_title';
 export const ENDING_TEXT = 'ending_text';
+export const IMMEDIATE_RESOLUTION = 'immediate_resolution';
+export const PLAYER_OUTCOME = 'player_outcome';
+export const CHARACTER_OUTCOMES = 'character_outcomes';
+export const TRUTH_OUTCOME = 'truth_outcome';
 export const TIME_COST_MINUTES = 'time_cost_minutes';
 export const TIME_COST_RATIONALE = 'time_cost_rationale';
 export const EVIDENCE_CHANGES = 'evidence_changes';
@@ -92,6 +97,7 @@ export const SUSPICION_DELTA = 'suspicion_delta';
 export const COMBAT_UPDATE = 'combat_update';
 export const ENDING_RECOMMENDATION = 'ending_recommendation';
 export const CURRENT_LOCATION_ID = 'current_location_id';
+export const ACTIVE_EVENT_ACK = 'active_event_ack';
 
 // ── Prompt 文本片段 ──
 

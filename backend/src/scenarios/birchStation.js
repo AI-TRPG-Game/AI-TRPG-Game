@@ -131,6 +131,7 @@ export const BIRCH_STATION_TUTORIAL = {
         foreground: {
           outcome: 'broadcast_heard',
           instruction: '把要求乘客留在车内的广播作为当前场景内所有人都能听见的变化；它开放行动空间，但不要替玩家决定去向。',
+          playerCue: '头顶的旧广播突然滋啦作响，乘务长反复要求所有乘客留在车内，站台方向随即传来仓促落锁的声音。',
           setFlags: { passenger_restriction_announced: true },
         },
       },
@@ -142,14 +143,17 @@ export const BIRCH_STATION_TUTORIAL = {
         present: {
           outcome: 'blackout_intervention_window',
           instruction: '立刻让人为停电打断玩家的行动。玩家与许薇同处包厢走廊，必须给玩家发现、保护她或追逐调包者的机会；不要预先断言她必然昏倒或手提箱必然被调包。',
+          playerCue: '灯光毫无预兆地熄灭。黑暗中，许薇失去平衡，却仍死死攥着调度钥匙；近处同时响起手提箱锁扣被碰动的轻响。',
           npcUpdates: { npc_002: { currentState: '停电骤临，她失去平衡并仍紧攥调度钥匙。' } },
           revealsLocations: ['loc_004'], setFlags: { blackout_started: true },
         },
         remote: {
           outcome: 'blackout_remote',
           instruction: '立刻让全站停电打断玩家的行动。玩家不在许薇身边，只能感知黑暗、列车异响和远处短促的动静；不要直接透露谁昏倒或谁调包了手提箱。',
+          playerCue: '全站灯光骤然熄灭，列车方向传来一声短促撞击和金属锁扣的轻响，但黑暗与雨声遮住了那里究竟发生了什么。',
           npcUpdates: { npc_002: { currentState: '停电中在包厢走廊遭到袭击，去向暂时不明。' } },
           aftermathInstruction: '玩家回到头等包厢外时，呈现许薇遇袭和手提箱被动过的可观察余波，并留下通往车顶检修通道的水迹；不要提供玩家未调查出的幕后身份。',
+          aftermathPlayerCue: '回到包厢走廊后，你发现许薇曾在黑暗中遇袭，手提箱锁扣有被撬动的痕迹，地上的水迹则一路指向车顶检修通道。',
           aftermathLocationId: 'loc_001', leavesAftermath: true,
           revealsLocations: ['loc_004'], setFlags: { blackout_started: true, suitcase_tampered_offscreen: true },
         },
@@ -159,9 +163,9 @@ export const BIRCH_STATION_TUTORIAL = {
       id: 'painting_0140', at: '01:40', latestAt: '02:20', phase: 'investigation', priority: 35,
       placement: { mode: 'fixed', locationId: 'loc_005' }, absencePolicy: 'defer', status: 'dormant', fired: false, outcome: null,
       branches: {
-        present: { outcome: 'painting_witnessed', instruction: '苏棠在玩家面前补完画作，第七个身影在最后一笔后出现。只呈现可观察异常，并让玩家决定如何询问或检查。' },
-        nearby: { outcome: 'painting_intercept', instruction: '玩家在相邻区域听见苏棠惊呼，可以赶到候车厅查看刚完成的画作。' },
-        expired: { outcome: 'painting_completed_offscreen', aftermathInstruction: '玩家进入候车厅后发现苏棠已经完成画作；画上异常仍可调查。' },
+        present: { outcome: 'painting_witnessed', instruction: '苏棠在玩家面前补完画作，第七个身影在最后一笔后出现。只呈现可观察异常，并让玩家决定如何询问或检查。', playerCue: '苏棠落下最后一笔时，湿画布上原本空着的位置缓慢显出第七道人影；她手中的画笔当场跌落。' },
+        nearby: { outcome: 'painting_intercept', instruction: '玩家在相邻区域听见苏棠惊呼，可以赶到候车厅查看刚完成的画作。', playerCue: '候车厅方向突然传来苏棠压抑不住的惊呼，紧接着是画笔落地的脆响。' },
+        expired: { outcome: 'painting_completed_offscreen', playerCue: '候车厅方向传来一声短促惊呼，随后彻底安静下来；那里的某件事已经发生。', leavesAftermath: true, aftermathLocationId: 'loc_005', aftermathInstruction: '玩家进入候车厅后发现苏棠已经完成画作；画上异常仍可调查。', aftermathPlayerCue: '候车厅里的画已经完成，湿润颜料间多出一道不属于任何已知乘客的第七个人影。' },
       },
     },
     {
@@ -171,6 +175,7 @@ export const BIRCH_STATION_TUTORIAL = {
         foreground: {
           outcome: 'power_restored',
           instruction: '让电力恢复成为所有地点都能感知的环境变化，并说明站务办公室现在可以进入；不要强迫玩家前往。',
+          playerCue: '整座站务楼的电灯接连亮起，封闭的站务办公室门锁发出复位声，门缝里透出久违的昏黄灯光。',
           revealsLocations: ['loc_006'], setFlags: { power_restored: true },
         },
       },
@@ -183,19 +188,25 @@ export const BIRCH_STATION_TUTORIAL = {
         present: {
           outcome: 'records_intervention_window',
           instruction: '玩家就在站务办公室时撞见程岳准备销毁调度记录。呈现正在发生、可阻止的行为；不要直接判定记录得救或毁坏，必要时请求检定。',
+          playerCue: '站务办公室里骤然腾起焦纸味：程岳正把一叠调度记录送向火焰，你还有机会阻止他。',
           npcUpdates: { npc_003: { visibility: 'visible', locationId: 'loc_006', currentState: '被撞见正在处理调度记录，必须立即应对玩家。' } },
           revealsLocations: ['loc_007'], setFlags: { records_crisis_started: true },
         },
         nearby: {
           outcome: 'records_intercept_window',
           instruction: '玩家在站务办公室相邻区域闻到焦纸味或听见柜门声，仍有短暂机会赶去阻止程岳；不要提前决定结果。',
+          playerCue: '站务办公室方向飘来新鲜的焦纸味，柜门与金属桶接连碰响；有人正在匆忙毁掉文件。',
           npcUpdates: { npc_003: { locationId: 'loc_006', currentState: '正在站务办公室匆忙销毁调度记录。' } },
           revealsLocations: ['loc_007'], setFlags: { records_crisis_started: true },
         },
         absent: {
           outcome: 'records_partially_destroyed',
+          instruction: '让玩家从当前地点感知站务楼方向的烟味、火光或异常动静，但不要透露是谁在烧毁什么；明确这会造成需要追查的后果。',
+          playerCue: '一股焦纸味混进潮湿空气，站务楼某扇窗后闪过不自然的火光；等你注意到时，那里的动静已经停了。',
+          leavesAftermath: true, aftermathLocationId: 'loc_006',
           npcUpdates: { npc_003: { locationId: 'loc_006', currentState: '已经销毁大部分调度记录并离开现场。' } },
           aftermathInstruction: '玩家后来进入站务办公室时，只能发现烧焦残页、灰烬和匆忙离开的痕迹；残页仍须保证提供一条较弱但可用的线索路径。',
+          aftermathPlayerCue: '站务办公室只剩一桶灰烬和几张烧焦残页；大部分调度记录已被毁掉，但残存的日期与编号仍能继续追查。',
           revealsLocations: ['loc_007'], setFlags: { records_partially_destroyed: true },
         },
       },
@@ -208,19 +219,25 @@ export const BIRCH_STATION_TUTORIAL = {
         present: {
           outcome: 'confession_conversation',
           instruction: '林晚愿意试探性开口，但完整供词和检修图取决于玩家是否承诺保护她与证据。先进行一段可回应的信任对话，不要无条件一次性交出全部真相。',
+          playerCue: '林晚反锁休息室的门，压低声音问你是否真能保护她和那些记录；她的手始终按在藏有检修图的柜门上。',
           npcUpdates: { npc_005: { locationId: 'loc_008', currentState: '决定试探玩家是否值得信任，准备谈及检修图。' } },
           setFlags: { lin_wan_ready_to_talk: true },
         },
         nearby: {
           outcome: 'confession_invitation',
           instruction: '林晚从休息室找到或叫住附近的玩家，低声提出只在安全处谈话；让玩家决定是否跟随并承诺保护她。',
+          playerCue: '林晚从休息室方向追来，低声叫住你，只说自己知道地下入口的事，但必须先换到一个安全的地方。',
           npcUpdates: { npc_005: { currentState: '主动寻找玩家，要求在安全处私下谈话。' } },
           setFlags: { lin_wan_ready_to_talk: true },
         },
         expired: {
           outcome: 'confession_note_hidden',
+          instruction: '让玩家察觉林晚已经离开休息室并刻意留下了一条可追查的藏匿提示，不要把提示等同于完整供词。',
+          playerCue: '远处传来休息室门仓促合拢的声音；林晚没有等到可信的回应，但她留下的动静像是在刻意引人寻找什么。',
+          leavesAftermath: true, aftermathLocationId: 'loc_008',
           npcUpdates: { npc_005: { currentState: '未能等到可信回应，藏起检修图后离开休息室。' } },
           aftermathInstruction: '玩家后来进入休息室时可发现林晚仓促留下的藏匿提示；它不能等同完整证词，但必须保留通往检修图的替代路线。',
+          aftermathPlayerCue: '休息室已经空了，柜门内侧却留着林晚仓促刻下的记号，指向她藏起检修图的位置。',
           setFlags: { lin_wan_left_hidden_hint: true },
         },
       },
@@ -232,6 +249,7 @@ export const BIRCH_STATION_TUTORIAL = {
         foreground: {
           outcome: 'water_receded',
           instruction: '用排水声、风向和积水变化让玩家得知地下入口已经露出；这是新选择而非强制路线。',
+          playerCue: '站务楼下方响起持续的排水轰鸣，积水退去后，一扇通往地下的锈蚀铁门终于露了出来。',
           revealsLocations: ['loc_009'], setFlags: { underground_entrance_open: true },
         },
       },
@@ -244,6 +262,7 @@ export const BIRCH_STATION_TUTORIAL = {
         foreground: {
           outcome: 'evidence_seizure_confrontation',
           instruction: '把程岳与沈岐对关键证据的争夺带到玩家当前地点，但只有在说明他们追踪到玩家或证据的合理路径后才让两人现身。他们目标不同，给玩家保护证据、谈判、逃脱或利用分歧的机会。',
+          playerCue: '追踪证据而来的脚步从两侧逼近：程岳与沈岐先后堵住去路，却各自要求你把关键资料交给他。',
           npcUpdates: {
             npc_003: { visibility: 'visible', currentState: '追踪到玩家所在区域，准备强夺关键证据。' },
             npc_001: { currentState: '来到玩家所在区域，试图带走药物记录和异常资料。' },
@@ -258,14 +277,14 @@ export const BIRCH_STATION_TUTORIAL = {
       id: 'departure_0510', at: '05:10', phase: 'aftermath', priority: 85,
       placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
       branches: {
-        foreground: { outcome: 'departure_warning', instruction: '让发车广播和人员公开站队收缩调查空间，引导玩家开始处理证据和最终立场，但仍保留行动选择。', setFlags: { departure_warning_given: true } },
+        foreground: { outcome: 'departure_warning', instruction: '让发车广播和人员公开站队收缩调查空间，引导玩家开始处理证据和最终立场，但仍保留行动选择。', playerCue: '雾港号第一次拉响发车预备汽笛，乘务员开始封闭车门；留给调查和转移证据的时间已经所剩无几。', setFlags: { departure_warning_given: true } },
       },
     },
     {
       id: 'last_boarding_0550', at: '05:50', phase: 'aftermath', priority: 110,
       placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
       branches: {
-        foreground: { outcome: 'last_choice_window', instruction: '发出最后登车警告，明确玩家只剩一次关键取舍。给出的结局选项必须使用“最终决定：公开真相 / 最终决定：保全并带走证据 / 最终决定：销毁或压下真相 / 最终决定：撤离白桦站”这类明确措辞，避免把普通移动误判为最终选择。', setFlags: { final_choice_requested: true } },
+        foreground: { outcome: 'last_choice_window', instruction: '发出最后登车警告，明确玩家只剩一次关键取舍。给出的结局选项必须使用“最终决定：公开真相 / 最终决定：保全并带走证据 / 最终决定：销毁或压下真相 / 最终决定：撤离白桦站”这类明确措辞，避免把普通移动误判为最终选择。', playerCue: '最后登车警告穿透雨幕，车门即将关闭；你必须决定如何处置已经掌握的真相与证据。', setFlags: { final_choice_requested: true } },
       },
     },
   ],

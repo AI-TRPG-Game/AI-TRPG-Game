@@ -24,7 +24,9 @@ import {
   TRIGGER, TRIGGER_PLAYER, TRIGGER_OTHERS,
   DIALOG_STAGE, DIALOG_A_CONFIRM, DIALOG_B_SANCHECK_CONFIRM, DIALOG_EXECUTING,
   BRANCH_B_SANCHECK_AWAITING,
-  SANCHECK,
+  SANCHECK, NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS, ACTIVE_EVENT_ACK,
+  ENDING_TITLE, ENDING_TEXT, IMMEDIATE_RESOLUTION, PLAYER_OUTCOME,
+  CHARACTER_OUTCOMES, TRUTH_OUTCOME,
 } from '../domain/NarrativeSchema.js';
 import { textRefiner } from '../services/TextRefiner.js';
 import { scheduleService } from '../services/ScheduleService.js';
@@ -39,6 +41,15 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+const FINALE_OPTIONS = [
+  'A. 最终决定：公开真相',
+  'B. 最终决定：保全并带走证据',
+  'C. 最终决定：销毁或压下真相',
+  'D. 最终决定：撤离白桦站',
+];
+
+const FINALE_OPTION_BUFFER = FINALE_OPTIONS.join('\n');
 
 export class GameOrchestrator {
   /**
@@ -88,12 +99,13 @@ export class GameOrchestrator {
     session.openingDone = true;
     session.scenarioId = definition.id;
     session.scenarioRules = structuredClone(definition.scenarioRules);
-    session.scenarioClock = { currentTime: '00:10', deadline: '06:00', turn: 0, phase: 'hook' };
+    session.scenarioClock = { currentTime: '00:10', deadline: '06:00', turn: 0, phase: 'hook', mode: 'normal' };
     session.playerLocationId = definition.scenarioRules.initialLocationId;
     session.sanity = { startSan: 60, state: 'stable', resolvedEventIds: [], traumaHistory: [], activeTrauma: null };
     session.scheduledEvents = structuredClone(definition.scheduledEvents);
     session.activeScene = null;
     session.scenarioFlags = {};
+    session.finaleState = null;
     session.worldSettings = definition.worldSettings;
     session.player = definition.player;
     session.locations = structuredClone(definition.locations);
@@ -112,6 +124,7 @@ export class GameOrchestrator {
       combat_update: null,
       ending_recommendation: { should_end: false, reason: '' },
       current_location_id: definition.scenarioRules.initialLocationId,
+      active_event_ack: null,
     };
     session.optionBuffer = definition.opening.options.join('\n');
     session.storyOpeningCache = { raw: JSON.stringify(openingParsed), parsed: openingParsed, timestamp: new Date().toISOString() };
@@ -577,6 +590,10 @@ export class GameOrchestrator {
       : userText;
 
     try {
+      if (session.phase === Phase.STORY_PLAY && session.finaleState?.stage === 'decision') {
+        return await this._handleFinaleDecision(session, userText, modelUserText, onDebug);
+      }
+
       if (session.phase === Phase.STORY_PLAY) {
         // 直接存用户原始输入（不替换选项字母）
         this._pushDisplay(session, 'player', userText);
@@ -633,7 +650,10 @@ export class GameOrchestrator {
         };
       }
 
-      if (result.scenarioDeadlineReached || result.endingRecommended) {
+      if (result.scenarioDeadlineReached) {
+        this._enterFinale(session, result);
+        this._discardOrdinaryOptionsForFinale(session, result, flowType);
+      } else if (result.endingRecommended) {
         const endingResult = await this._triggerEnding(session, null, onDebug, null, result.endingReason);
         endingResult.refinedHtml = `${result.refinedHtml || ''}${endingResult.refinedHtml || ''}`;
         endingResult.scenarioMessages = result.scenarioMessages || [];
@@ -664,6 +684,14 @@ export class GameOrchestrator {
       : null;
     const assembled = inputAssembler.assemble(flowType, session, { userText });
     const debugLogs = [];
+
+    if (turnPreparation?.activeScene) {
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'event_selected',
+        flowType,
+        content: `[事件调度] 已选择 ${turnPreparation.activeScene.eventId}/${turnPreparation.activeScene.outcome}，等待叙事确认。`,
+      });
+    }
 
     const { raw, refinedHtml, reasoningContent } = await this._callLLMWithRetry(session, assembled, flowType, debugLogs, onDebug);
 
@@ -720,6 +748,14 @@ export class GameOrchestrator {
     if (flowType === FlowType.NARRATION_I && result.branch === 'NARRATIVE') {
       const scenarioResult = this._applyScenarioRuling(session, result.parsed);
       Object.assign(result, scenarioResult);
+      this._discardOrdinaryOptionsForFinale(session, result, flowType);
+      if (scenarioResult.eventResolution) {
+        this._pushDebug(debugLogs, onDebug, {
+          type: 'event_resolved',
+          flowType,
+          content: `[事件调度] 已结算 ${scenarioResult.eventResolution.id}/${scenarioResult.eventResolution.outcome}${scenarioResult.eventResolution.aftermath ? '（余波）' : ''}。`,
+        });
+      }
     }
 
     return result;
@@ -775,10 +811,18 @@ export class GameOrchestrator {
       const locationMessage = `【新地点已发现】${location.name}已加入地点列表。`;
       appendSystemMessage(locationMessage);
     }
+    let finaleDecisionActivated = false;
+    if (session.scenarioClock?.mode === 'finale'
+      && session.finaleState?.stage === 'resolve_scene'
+      && !session.combat?.active) {
+      const finaleMessage = this._activateFinaleDecision(session);
+      appendSystemMessage(finaleMessage);
+      finaleDecisionActivated = true;
+    }
     const recommendation = parsed?.ending_recommendation;
     const truthProgress = scenarioProgressService.evaluateTruth(session);
     const playerChoiceReady = scenarioProgressService.canAcceptRecommendedEnding(session);
-    const endingRecommended = playerChoiceReady && (
+    const endingRecommended = session.scenarioClock?.mode !== 'finale' && playerChoiceReady && (
       Boolean(recommendation?.should_end) || truthProgress.truthProvable
     );
     return {
@@ -787,6 +831,7 @@ export class GameOrchestrator {
       endingReason: endingRecommended ? recommendation.reason : (clockResult.deadlineReached ? 'deadline' : null),
       scenarioMessages,
       truthProgress,
+      finaleDecisionActivated,
       eventResolution: eventResult.event
         ? { id: eventResult.event.id, outcome: eventResult.event.outcome, aftermath: Boolean(eventResult.aftermath) }
         : null,
@@ -910,8 +955,18 @@ export class GameOrchestrator {
     const tryRefine = async (rawText) => {
       const parsed = jsonOutputParser.parse(rawText);
       if (parsed && parsed[requiredField] !== undefined) {
-        const refined = textRefiner.refine(flowType, parsed);
-        return { ok: true, raw: rawText, refinedHtml: refined.html };
+        const semantic = this._validateFlowSemantics(session, flowType, parsed);
+        if (semantic.ok) {
+          const refined = textRefiner.refine(flowType, parsed);
+          return { ok: true, raw: rawText, refinedHtml: refined.html };
+        }
+        this._pushDebug(debugLogs, onDebug, {
+          type: semantic.type || 'semantic_validation_failed',
+          flowType,
+          attempt: attemptNum,
+          content: semantic.message,
+        });
+        return { ok: false, reason: semantic.message };
       }
       // 记录详细诊断信息：raw 内容 + 字段名 + 字段值类型 + 尾部内容 + finish_reason
       // 用于排查"LLM 看起来按格式输出但系统判错"的场景
@@ -968,7 +1023,7 @@ export class GameOrchestrator {
         });
       }
 
-      return { ok: false };
+      return { ok: false, reason: `缺少必需字段“${requiredField}”或JSON无法解析。` };
     };
 
     let result = await tryRefine(raw);
@@ -976,11 +1031,13 @@ export class GameOrchestrator {
 
     // 第一次重试：追加 reminder 提示
     this._pushDebug(debugLogs, onDebug, {
-      type: 'retry_clear',
+      type: session.activeScene ? 'event_retry' : 'retry_clear',
+      flowType,
+      attempt: attemptNum,
       content: `系统正在规范LLM输出（缺少必需字段 "${requiredField}"），请稍候…`,
     });
 
-    const reminder = `\n\n【请务必通过调用指定函数返回合法 JSON，且必须包含 "${requiredField}" 字段；不要直接输出文本、markdown 或代码块】`;
+    const reminder = `\n\n【上一次输出未通过系统校验：${result.reason || `缺少“${requiredField}”`} 请重新调用指定函数返回完整合法JSON；必须修正该问题，不要输出函数调用之外的文本。】`;
     const retryMessages = [...assembled.messages];
     const lastUserIdx = retryMessages.map(m => m.role).lastIndexOf('user');
     if (lastUserIdx >= 0) {
@@ -1003,11 +1060,13 @@ export class GameOrchestrator {
 
     // 第二次重试：继续沿用当前模型的思考配置，并追加更强的 reminder。
     this._pushDebug(debugLogs, onDebug, {
-      type: 'retry_clear',
+      type: session.activeScene ? 'event_retry' : 'retry_clear',
+      flowType,
+      attempt: attemptNum,
       content: `第二次重试：继续使用思考模式 high + 强化 reminder（不再切换到非思考模式）`,
     });
 
-    const strongerReminder = `\n\n【重要提醒】上一次响应未通过解析（缺少必需字段 "${requiredField}"）。请务必通过调用指定函数返回合法 JSON，且必须包含 "${requiredField}" 字段；不要直接输出文本、markdown 或代码块。请检查函数名和字段名是否正确。`;
+    const strongerReminder = `\n\n【重要提醒】上一次响应仍未通过系统校验：${result.reason || `缺少“${requiredField}”`}。请务必调用指定函数返回合法JSON，并逐项满足活动事件或结局的语义要求；不要输出函数调用之外的文本。`;
     const retryMessages2 = [...assembled.messages];
     const lastUserIdx2 = retryMessages2.map(m => m.role).lastIndexOf('user');
     if (lastUserIdx2 >= 0) {
@@ -1028,9 +1087,195 @@ export class GameOrchestrator {
     result = await tryRefine(raw);
     if (result.ok) return { raw: result.raw, refinedHtml: result.refinedHtml, reasoningContent: lastReasoningContent };
 
+    const eventFallback = this._buildActiveEventFallback(session, flowType, raw);
+    if (eventFallback) {
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'event_fallback',
+        flowType,
+        attempt: attemptNum,
+        content: `[事件调度] 模型未可靠确认活动事件，已使用作者兜底线索：${session.activeScene?.eventId || 'unknown'}。`,
+      });
+      return { ...eventFallback, reasoningContent: lastReasoningContent };
+    }
+
+    if (flowType === FlowType.ENDING_GEN) {
+      const endingFallback = this._buildEndingFallback(session, raw);
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'ending_fallback',
+        flowType,
+        attempt: attemptNum,
+        content: '模型未能生成完整收束，已使用确定性的结构化结局兜底。',
+      });
+      return { ...endingFallback, reasoningContent: lastReasoningContent };
+    }
+
     // 第三次仍失败：raw 兜底（必须包裹 <div class="kp-block">，否则前端 _restoreUI 的 startsWith('<div') 判断会失败）
     this._applyRawFallback(session, flowType, raw, requiredField, debugLogs, onDebug);
     return { raw, refinedHtml: `<div class="kp-block">${escapeHtml(raw)}</div>`, reasoningContent: lastReasoningContent };
+  }
+
+  _validateFlowSemantics(session, flowType, parsed) {
+    if (flowType === FlowType.ENDING_GEN) {
+      const requiredTexts = [ENDING_TITLE, IMMEDIATE_RESOLUTION, PLAYER_OUTCOME, TRUTH_OUTCOME, ENDING_TEXT];
+      const missingText = requiredTexts.find(field => !String(parsed?.[field] || '').trim());
+      if (missingText) {
+        return { ok: false, type: 'ending_validation_failed', message: `结局缺少明确字段：${missingText}。` };
+      }
+      if (/(?:故事|旅程|冒险).{0,8}(?:才刚刚开始|刚刚开始|仍在继续)|未完待续|to\s+be\s+continued/i.test(parsed[ENDING_TEXT])) {
+        return { ok: false, type: 'ending_validation_failed', message: '结局仍使用未完成式措辞，必须明确结束本局故事。' };
+      }
+      const outcomes = Array.isArray(parsed[CHARACTER_OUTCOMES]) ? parsed[CHARACTER_OUTCOMES] : [];
+      const invalidOutcome = outcomes.find(item => !String(item?.npc_id || '').trim()
+        || !String(item?.name || '').trim()
+        || !String(item?.outcome || '').trim());
+      if (invalidOutcome) {
+        return { ok: false, type: 'ending_validation_failed', message: '结局中的每一项角色去向都必须包含npc_id、姓名和明确结果。' };
+      }
+      const requiredNpcs = this._requiredEndingNpcs(session);
+      const missingNpc = requiredNpcs.find(npc => !outcomes.some(item => item?.npc_id === npc.id && String(item.outcome || '').trim()));
+      if (missingNpc) {
+        return { ok: false, type: 'ending_validation_failed', message: `结局缺少相关角色 ${missingNpc.id}（${missingNpc.name}）的明确去向。` };
+      }
+      return { ok: true };
+    }
+
+    const narrativeFlows = new Set([
+      FlowType.STORY_OPENING,
+      FlowType.NARRATION_I,
+      FlowType.NARRATION_II,
+    ]);
+    if (!narrativeFlows.has(flowType)) return { ok: true };
+
+    const scene = session.activeScene;
+    const acknowledgement = parsed?.[ACTIVE_EVENT_ACK];
+    if (!scene) {
+      return acknowledgement === null
+        ? { ok: true }
+        : {
+          ok: false,
+          type: 'event_acknowledgement_failed',
+          message: '当前没有活动事件，active_event_ack必须为null。',
+        };
+    }
+
+    const consequence = String(acknowledgement?.perceived_consequence || '').trim();
+    const matches = acknowledgement
+      && acknowledgement.event_id === scene.eventId
+      && acknowledgement.outcome === scene.outcome
+      && acknowledgement.incorporated === true
+      && consequence.length > 0;
+    return matches
+      ? { ok: true }
+      : {
+        ok: false,
+        type: 'event_acknowledgement_failed',
+        message: `活动事件未被可靠写入叙事。active_event_ack必须确认 event_id=${scene.eventId}、outcome=${scene.outcome}、incorporated=true，并填写玩家可感知后果。`,
+      };
+  }
+
+  _buildActiveEventFallback(session, flowType, raw) {
+    if (![FlowType.NARRATION_I, FlowType.NARRATION_II].includes(flowType) || !session.activeScene) return null;
+    const scene = session.activeScene;
+    const parsed = jsonOutputParser.parse(raw) || {};
+    const cue = String(scene.playerCue || '周围的局势突然发生变化，迫使你立刻作出回应。').trim();
+    const modelNarration = typeof parsed[NARRATION] === 'string' ? parsed[NARRATION].trim() : '';
+    const narration = modelNarration.includes(cue) ? modelNarration : [cue, modelNarration].filter(Boolean).join('\n\n');
+    const actions = Array.isArray(parsed[ACTIONS]) && parsed[ACTIONS].length > 0 ? parsed[ACTIONS] : null;
+    const defaultOptions = ['A. 立即观察这场变化', 'B. 询问在场人物', 'C. 保护自己与关键证据', 'D. 自由行动'];
+    const options = actions
+      ? null
+      : (Array.isArray(parsed[OPTIONS]) && parsed[OPTIONS].length > 0 ? parsed[OPTIONS] : defaultOptions);
+    const fallback = {
+      [NARRATION]: narration || cue,
+      [LOCATIONS]: Array.isArray(parsed[LOCATIONS]) ? parsed[LOCATIONS] : [],
+      [NPCS]: Array.isArray(parsed[NPCS]) ? parsed[NPCS] : [],
+      [ITEMS]: Array.isArray(parsed[ITEMS]) ? parsed[ITEMS] : [],
+      [ACTIONS]: actions,
+      [OPTIONS]: options,
+      time_cost_minutes: Number.isInteger(parsed.time_cost_minutes) ? parsed.time_cost_minutes : 10,
+      time_cost_rationale: typeof parsed.time_cost_rationale === 'string' ? parsed.time_cost_rationale : '剧情事件打断了当前行动。',
+      evidence_changes: Array.isArray(parsed.evidence_changes) ? parsed.evidence_changes : [],
+      suspicion_delta: Number.isInteger(parsed.suspicion_delta) ? parsed.suspicion_delta : 0,
+      combat_update: parsed.combat_update && typeof parsed.combat_update === 'object' ? parsed.combat_update : null,
+      ending_recommendation: parsed.ending_recommendation && typeof parsed.ending_recommendation === 'object'
+        ? parsed.ending_recommendation
+        : { should_end: false, reason: '' },
+      current_location_id: typeof parsed.current_location_id === 'string'
+        ? parsed.current_location_id
+        : (session.playerLocationId || ''),
+      [ACTIVE_EVENT_ACK]: {
+        event_id: scene.eventId,
+        outcome: scene.outcome,
+        incorporated: true,
+        perceived_consequence: cue,
+      },
+    };
+    const fallbackRaw = JSON.stringify(fallback);
+    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(flowType, fallback).html };
+  }
+
+  _requiredEndingNpcs(session) {
+    const participants = new Set(session.endingState?.combatSnapshot?.participants || []);
+    return (session.npcs || []).filter(npc => npc.id !== 'npc_000'
+      && ((npc.importance === 'key' && npc.visibility !== 'hidden') || participants.has(npc.id)));
+  }
+
+  _buildEndingFallback(session, raw) {
+    const parsed = jsonOutputParser.parse(raw) || {};
+    const player = (session.npcs || []).find(npc => npc.id === 'npc_000');
+    const choice = session.finalChoice;
+    const titleByChoice = {
+      expose: '雨幕后的证言',
+      preserve: '带走的禁忌档案',
+      destroy: '沉入灰烬的真相',
+      suppress: '被压下的名字',
+      withdraw: '末班车离站',
+    };
+    const truthByChoice = {
+      expose: '你将已保全的证据整理并公开，使顾言之死与白桦矿难重新进入公众视野。',
+      preserve: '你没有立即公开异常资料，而是把已保全证据带离白桦站，避免它们再次被销毁。',
+      destroy: '你亲手销毁危险资料；真相失去了公开证明，却也暂时无法再被利用。',
+      suppress: '你选择压下调查结果，证据被封存，白桦站重新沉入沉默。',
+      withdraw: '你放弃继续处置核心资料，能够带走的线索有限，其余秘密留在了白桦站。',
+    };
+    const death = player?.hp != null && player.hp <= 0;
+    const madness = !death && player?.san != null && player.san <= 0;
+    const endingType = session.endingState?.endingType || (death ? 'death' : madness ? 'madness' : 'withdrawal');
+    const immediateResolution = death
+      ? '最后的冲突以你的伤势彻底恶化告终，其他人被迫停止争夺并面对已经发生的死亡。'
+      : madness
+        ? '最后的异常压垮了你的判断，眼前的冲突失去继续进行的可能，幸存者只能将你带离现场。'
+        : '汽笛响起后，眼前的争夺终于停止；你脱离了直接危险，并完成了对证据去向的最后决定。';
+    const playerOutcome = death
+      ? '你未能活着离开白桦站，但留下的记录成为后来者追查真相的起点。'
+      : madness
+        ? '你活着离开了现场，却再也无法完整复述白桦站中发生的一切。'
+        : '你在雾港号离站前保住性命离开现场，并承担自己最终选择带来的后果。';
+    const characterOutcomes = this._requiredEndingNpcs(session).map(npc => ({
+      npc_id: npc.id,
+      name: npc.name,
+      outcome: npc.status === 'departed'
+        ? `${npc.name}已经退场，其行动对本局故事的影响至此确定。`
+        : `${npc.name}在冲突结束后离开当前现场；其最后可确认的状态是：${npc.currentState || '去向未明'}。`,
+    }));
+    const truthOutcome = truthByChoice[choice]
+      || (death || madness
+        ? '你未能亲自完成证据处置；已经保全的材料由幸存者接手，未保全的部分则随车站一同失去。'
+        : '列车离站后，证据按你能够完成的方式被保留下来，未查明的部分成为本案永久缺口。');
+    const fallback = {
+      ending_type: endingType,
+      [ENDING_TITLE]: parsed[ENDING_TITLE] || titleByChoice[choice] || (death ? '白桦站的最后记录' : madness ? '雨夜失序' : '雾港号离站'),
+      [IMMEDIATE_RESOLUTION]: immediateResolution,
+      [PLAYER_OUTCOME]: playerOutcome,
+      [CHARACTER_OUTCOMES]: characterOutcomes,
+      [TRUTH_OUTCOME]: truthOutcome,
+      [ENDING_TEXT]: `06:00，雾港号驶离白桦站。本局调查已经结束：眼前的危险得到处置，相关人物各自承担后果，而真相也依照你的选择获得了确定去向。`,
+      debrief: parsed.debrief && typeof parsed.debrief === 'object'
+        ? parsed.debrief
+        : { hidden_plot: '白桦矿难、异常转运与顾言之死彼此相连。', important_events: [], evidence_used: (session.evidence || []).filter(item => item.secured).map(item => item.id), missed_leads: [], next_try: '尝试更早保全证据并取得关键证人的信任。' },
+    };
+    const fallbackRaw = JSON.stringify(fallback);
+    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(FlowType.ENDING_GEN, fallback).html };
   }
 
   _applyRawFallback(session, flowType, raw, requiredField, debugLogs, onDebug) {
@@ -1080,6 +1325,8 @@ export class GameOrchestrator {
       suspicion: session.suspicion,
       combat: session.combat,
       sanity: session.sanity,
+      finaleState: session.finaleState,
+      finalChoice: session.finalChoice,
     });
   }
 
@@ -1374,9 +1621,22 @@ export class GameOrchestrator {
         current_location_id: result.parsed.current_location_id || turnRuling.current_location_id || '',
       };
       scenarioResult = this._applyScenarioRuling(session, finalRuling);
+      Object.assign(result, scenarioResult);
+      this._discardOrdinaryOptionsForFinale(session, result, FlowType.NARRATION_II);
+      if (scenarioResult.eventResolution) {
+        this._pushDebug(debugLogs, onDebug, {
+          type: 'event_resolved',
+          flowType: FlowType.NARRATION_II,
+          content: `[事件调度] 已结算 ${scenarioResult.eventResolution.id}/${scenarioResult.eventResolution.outcome}${scenarioResult.eventResolution.aftermath ? '（余波）' : ''}。`,
+        });
+      }
     }
 
-    if (scenarioResult.scenarioDeadlineReached || scenarioResult.endingRecommended) {
+    if (scenarioResult.scenarioDeadlineReached) {
+      this._enterFinale(session, result);
+      this._discardOrdinaryOptionsForFinale(session, result, FlowType.NARRATION_II);
+      scenarioResult.scenarioMessages = result.scenarioMessages || scenarioResult.scenarioMessages;
+    } else if (scenarioResult.endingRecommended) {
       const endingResult = await this._triggerEnding(
         session,
         null,
@@ -1405,6 +1665,91 @@ export class GameOrchestrator {
     return result;
   }
 
+  _recordSystemMessage(session, message) {
+    this._pushDisplay(session, 'system', message);
+    session.chatRecord.push({
+      role: ChatRole.SYSTEM,
+      type: ChatEntryType.SYSTEM,
+      content: message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  _discardOrdinaryOptionsForFinale(session, result, flowType) {
+    if (!result?.finaleDecisionActivated || !result.parsed) return;
+    const previousHtml = result.refinedHtml;
+    result.parsed[OPTIONS] = null;
+    result.refinedHtml = textRefiner.refine(flowType, result.parsed).html;
+
+    const displayEntry = [...(session.displayLog || [])].reverse()
+      .find(entry => entry.role === 'kp' && entry.content === previousHtml);
+    if (displayEntry) displayEntry.content = result.refinedHtml;
+
+    const chatEntry = [...(session.chatRecord || [])].reverse()
+      .find(entry => entry.role === ChatRole.KP && entry.parsed === result.parsed);
+    if (chatEntry) chatEntry.content = result.parsed[NARRATION] || chatEntry.content;
+  }
+
+  _activateFinaleDecision(session) {
+    session.finaleState = {
+      ...(session.finaleState || {}),
+      stage: 'decision',
+      decisionRequestedAt: session.scenarioClock?.currentTime || '06:00',
+    };
+    session.optionBuffer = FINALE_OPTION_BUFFER;
+    return `【终局抉择】眼前的危险已经告一段落。请选择如何处置真相与证据：\n${FINALE_OPTION_BUFFER}`;
+  }
+
+  _enterFinale(session, result = {}) {
+    if (!session.scenarioClock || session.scenarioClock.mode === 'finale') return;
+    session.scenarioClock.mode = 'finale';
+    session.scenarioClock.phase = 'finale';
+    const resolvingScene = Boolean(session.combat?.active);
+    session.finaleState = {
+      stage: resolvingScene ? 'resolve_scene' : 'decision',
+      enteredAt: session.scenarioClock.currentTime,
+      reason: 'deadline',
+    };
+    const message = resolvingScene
+      ? '【06:00 · 终局】雾港号已经鸣笛，正常调查时间结束。游戏内时钟暂停；请先解决眼前的直接危险，随后再决定真相与证据的去向。'
+      : this._activateFinaleDecision(session);
+    this._recordSystemMessage(session, message);
+    result.scenarioDeadlineReached = false;
+    result.finaleEntered = true;
+    result.finaleDecisionActivated = !resolvingScene;
+    result.scenarioMessages = [...(result.scenarioMessages || []), message];
+  }
+
+  async _handleFinaleDecision(session, userText, modelUserText, onDebug) {
+    this._pushDisplay(session, 'player', userText);
+    session.chatRecord.push({
+      role: ChatRole.PLAYER,
+      type: ChatEntryType.PROMPT,
+      content: modelUserText,
+      timestamp: new Date().toISOString(),
+    });
+    const choice = scenarioProgressService.detectFinalChoice(modelUserText);
+    if (!choice) {
+      const message = `【终局抉择尚未确认】请明确选择以下一项：\n${FINALE_OPTION_BUFFER}`;
+      session.optionBuffer = FINALE_OPTION_BUFFER;
+      session.subState = SubState.AWAITING_INPUT;
+      this._recordSystemMessage(session, message);
+      this.repository.save(session);
+      return {
+        session: session.toClientJSON(),
+        result: { branch: 'FINALE_DECISION', refinedHtml: '', scenarioMessages: [message] },
+      };
+    }
+
+    session.finalChoice = choice;
+    session.optionBuffer = '';
+    session.combat = null;
+    session.pendingDiceFlow = null;
+    session.finaleState = { ...(session.finaleState || {}), stage: 'generating', choice };
+    const endingResult = await this._triggerEnding(session, null, onDebug, null, 'final_choice');
+    return { session: session.toClientJSON(), result: endingResult };
+  }
+
   /**
    * 触发结局流程。
    * 1. 推送结局触发系统消息
@@ -1417,8 +1762,13 @@ export class GameOrchestrator {
 
     // 1. 推送结局触发消息
     const player = session.npcs.find(n => n.id === 'npc_000');
+    const explicitReasonLabel = explicitReason === 'deadline'
+      ? '06:00已到，雾港号即将恢复通行'
+      : explicitReason === 'final_choice'
+        ? '玩家已经确认真相与证据的最终去向'
+        : explicitReason;
     const triggerMsg = explicitReason
-      ? `【故事进入结局判定：${explicitReason === 'deadline' ? '06:00已到，雾港号即将恢复通行' : explicitReason}】`
+      ? `【故事进入结局判定：${explicitReasonLabel}】`
       : endingService.buildEndingTriggerMessage(player);
     this._pushDisplay(session, 'system', triggerMsg);
     if (onSystemMessage) {
@@ -1433,13 +1783,20 @@ export class GameOrchestrator {
 
     // 2. 设置 ENDING_PENDING 状态
     session.subState = SubState.ENDING_PENDING;
+    const combatSnapshot = session.combat ? structuredClone(session.combat) : null;
     session.endingState = {
       reason: explicitReason || endingService.getEndingType(player),
       endingType: scenarioProgressService.chooseEndingType(session, explicitReason),
       playerChoice: session.finalChoice || null,
       evidenceSummary: (session.evidence || []).filter(e => e.secured).map(e => e.id),
       truthProgress: scenarioProgressService.evaluateTruth(session),
+      combatSnapshot,
     };
+    session.optionBuffer = '';
+    session.pendingDiceFlow = null;
+    session.activeScene = null;
+    session.combat = null;
+    session.finaleState = { ...(session.finaleState || {}), stage: 'generating' };
     this.repository.save(session);
 
     // 3. 调用 ENDING_GEN flow
@@ -1456,11 +1813,6 @@ export class GameOrchestrator {
 
     // 使用 TextRefiner 渲染结局文本（统一 escape/markdown/<br> 处理）
     this._pushDisplay(session, 'kp', refinedHtml);
-    if (endingParsed?.debrief) {
-      const debrief = endingParsed.debrief;
-      const debriefText = `【主持人复盘（含剧透）】\n隐藏真相：${debrief.hidden_plot || '—'}\n重要事件：${(debrief.important_events || []).join('；') || '—'}\n实际使用的证据：${(debrief.evidence_used || []).join('；') || '—'}\n错过线索：${(debrief.missed_leads || []).join('；') || '—'}\n下次可尝试：${debrief.next_try || '—'}`;
-      this._pushDisplay(session, 'system', debriefText);
-    }
     const endingEntry = {
       role: ChatRole.KP,
       type: ChatEntryType.NARRATION,
@@ -1478,6 +1830,8 @@ export class GameOrchestrator {
     // 4. 设置 RESTART_PENDING 状态
     session.subState = SubState.RESTART_PENDING;
     session.pendingDiceFlow = null;
+    session.optionBuffer = '';
+    session.finaleState = { ...(session.finaleState || {}), stage: 'complete', completedAt: new Date().toISOString() };
     this.repository.save(session);
 
     return { debugLogs, endingTriggered: true, endingText, endingType, refinedHtml };

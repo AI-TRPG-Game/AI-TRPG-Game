@@ -17,7 +17,8 @@ import {
   NARRATION, LOCATIONS, NPCS, ITEMS, OPTIONS,
   ENTITY_NAME, ENTITY_DESC, ENTITY_BASE_DESC, ENTITY_CURRENT_STATE, ITEM_STATUS,
   SUMMARY, WORLD_IMPRESSION, KEY_DESCRIPTION,
-  ENDING_TEXT,
+  ENDING_TEXT, ENDING_TITLE, IMMEDIATE_RESOLUTION, PLAYER_OUTCOME,
+  CHARACTER_OUTCOMES, TRUTH_OUTCOME,
 } from '../domain/NarrativeSchema.js';
 
 // HTML 转义：转义会破坏 HTML 结构的字符（& < >），并把换行符转为 <br>
@@ -237,9 +238,31 @@ export class TextRefiner {
   // ── 结局生成 ──
   _refineEnding(parsed) {
     const text = parsed[ENDING_TEXT] || '';
+    const title = parsed[ENDING_TITLE] || '故事结局';
+    const immediate = parsed[IMMEDIATE_RESOLUTION] || '';
+    const playerOutcome = parsed[PLAYER_OUTCOME] || '';
+    const truthOutcome = parsed[TRUTH_OUTCOME] || '';
+    const characterOutcomes = Array.isArray(parsed[CHARACTER_OUTCOMES])
+      ? parsed[CHARACTER_OUTCOMES]
+      : [];
+    const plainSections = [
+      `【结局：${title}】`,
+      `最后时刻：${immediate}`,
+      `主角结局：${playerOutcome}`,
+      ...characterOutcomes.map(item => `${item.name || item.npc_id}：${item.outcome}`),
+      `真相与证据：${truthOutcome}`,
+      text,
+    ].filter(Boolean);
+    const characterHtml = characterOutcomes.length
+      ? `<div class="ending-section"><strong>相关人物</strong><br>${characterOutcomes.map(item => `${escapeHtml(item.name || item.npc_id)}：${renderText(item.outcome || '')}`).join('<br>')}</div>`
+      : '';
+    const debrief = parsed.debrief && typeof parsed.debrief === 'object' ? parsed.debrief : null;
+    const debriefHtml = debrief
+      ? `<details class="ending-debrief"><summary>主持人复盘（含剧透）</summary><div><strong>隐藏真相</strong><br>${renderText(debrief.hidden_plot || '—')}</div><div><strong>重要事件</strong><br>${renderText((debrief.important_events || []).join('；') || '—')}</div><div><strong>实际使用的证据</strong><br>${renderText((debrief.evidence_used || []).join('；') || '—')}</div><div><strong>错过线索</strong><br>${renderText((debrief.missed_leads || []).join('；') || '—')}</div><div><strong>下次可尝试</strong><br>${renderText(debrief.next_try || '—')}</div></details>`
+      : '';
     return {
-      plainText: text,
-      html: `<div class="kp-block">${renderText(text)}</div>`,
+      plainText: plainSections.join('\n\n'),
+      html: `<div class="kp-block ending-card"><div class="ending-title">${escapeHtml(`【结局：${title}】`)}</div><div class="ending-section"><strong>最后时刻</strong><br>${renderText(immediate)}</div><div class="ending-section"><strong>主角结局</strong><br>${renderText(playerOutcome)}</div>${characterHtml}<div class="ending-section"><strong>真相与证据</strong><br>${renderText(truthOutcome)}</div><div class="kp-divider"></div>${renderText(text)}${debriefHtml}</div>`,
     };
   }
 

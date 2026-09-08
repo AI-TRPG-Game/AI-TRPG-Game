@@ -1,6 +1,7 @@
 import { BIRCH_STATION_TUTORIAL } from '../src/scenarios/birchStation.js';
 import { ScenarioProgressService } from '../src/services/ScenarioProgressService.js';
 import { DamageResolver } from '../src/services/DamageResolver.js';
+import { GameSession } from '../src/domain/GameSession.js';
 
 let passed = 0;
 function assert(condition, message) {
@@ -13,6 +14,19 @@ assert(definition.opening.narration.includes('苏棠') && definition.opening.nar
 assert(definition.npcs.some(npc => npc.name === '苏棠' && npc.visibility === 'visible'), 'Su Tang should be a visible authored NPC');
 assert(definition.npcs.some(npc => npc.name === '林晚' && npc.visibility === 'visible'), 'Lin Wan should be a visible authored NPC');
 assert(definition.npcs.some(npc => npc.name === '程岳' && npc.visibility === 'hidden'), 'Cheng Yue should remain hidden until revealed');
+
+const oldEvent = structuredClone(definition.scheduledEvents[0]);
+delete oldEvent.branches.foreground.playerCue;
+const migrated = new GameSession({
+  scenarioId: definition.id,
+  scenarioRules: structuredClone(definition.scenarioRules),
+  scenarioClock: { currentTime: '00:40', deadline: '06:00', turn: 1, phase: 'hook' },
+  scheduledEvents: [oldEvent],
+  activeScene: { kind: 'foreground', eventId: oldEvent.id, branchKey: 'foreground', outcome: oldEvent.branches.foreground.outcome, locationId: 'loc_001' },
+  locations: structuredClone(definition.locations),
+});
+assert(migrated.scenarioClock.mode === 'normal' && migrated.finaleState === null, 'older saves should migrate to normal clock mode with no finale state');
+assert(migrated.scheduledEvents[0].branches.foreground.playerCue && migrated.activeScene.playerCue, 'older Birch Station event snapshots should regain authored player cues');
 
 const service = new ScenarioProgressService();
 const session = {

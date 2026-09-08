@@ -76,6 +76,13 @@ const endingService = new EndingService();
   session.npcs[0].currentState = '受伤状态';
   session.npcs[1].hp = 5;
   session.npcs[1].currentState = '紧张';
+  session.optionBuffer = 'A. 旧选项';
+  session.pendingDiceFlow = { actions: [] };
+  session.activeScene = { eventId: 'old-event' };
+  session.combat = { active: true };
+  session.finalChoice = 'withdraw';
+  session.endingState = { reason: 'death' };
+  session.finaleState = { stage: 'complete' };
 
   endingService.restartStory(session);
 
@@ -98,6 +105,8 @@ const endingService = new EndingService();
   // 状态恢复
   assert(session.phase === Phase.STORY_PLAY, `phase 应为 STORY_PLAY`);
   assert(session.subState === SubState.AWAITING_INPUT, `subState 应为 AWAITING_INPUT`);
+  assert(session.optionBuffer === '' && session.pendingDiceFlow === null && session.activeScene === null, '重开应清理普通选项、待检定和活动场景');
+  assert(session.combat === null && session.finalChoice === null && session.endingState === null && session.finaleState === null, '重开应清理战斗与终局状态');
 }
 
 // === 测试 injectStoryOpeningMessages ===

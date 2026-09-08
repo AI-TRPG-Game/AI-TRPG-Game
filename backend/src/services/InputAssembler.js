@@ -333,10 +333,16 @@ export class InputAssembler {
     const player = session.npcs.find(n => n.id === 'npc_000');
     const endingType = session.endingState?.endingType || (player ? endingService.getEndingType(player) : 'withdrawal');
     const forcedReason = session.endingState?.reason;
+    const conflictParticipants = new Set(session.endingState?.combatSnapshot?.participants || []);
+    const relevantNpcs = (session.npcs || []).filter(npc => npc.id !== 'npc_000'
+      && ((npc.importance === 'key' && npc.visibility !== 'hidden') || conflictParticipants.has(npc.id)));
+    const outcomeRoster = relevantNpcs.length
+      ? relevantNpcs.map(npc => `${npc.id}（${npc.name}）：当前状态=${npc.currentState || '不明'}；位置=${npc.locationId || '不明'}；是否退场=${npc.status === 'departed' ? '是' : '否'}`).join('\n')
+      : '无必须单列的相关NPC。';
     messages.push({
       role: 'user',
       content: forcedReason
-        ? `结局触发原因：${forcedReason}。请根据完整状态生成合适结局，不要仅按HP/SAN判断。`
+        ? `结局触发原因：${forcedReason}。系统判定的结局类型=${endingType}；玩家最终选择=${session.finalChoice || '无'}。请根据完整状态生成合适结局，不要仅按HP/SAN判断。\ncharacter_outcomes必须覆盖以下角色且npc_id必须完全一致：\n${outcomeRoster}`
         : `玩家${endingType === 'death' ? 'HP 归零' : 'SAN 归零'}，请生成 ${endingType} 类型的结局文本。`,
     });
   }

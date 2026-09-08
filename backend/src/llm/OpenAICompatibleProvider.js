@@ -1,12 +1,12 @@
 import { LLMProvider } from './LLMProvider.js';
 
 /**
- * OpenAI-compatible LLM provider（DeepSeek strict 模式 + 思考模式）。
+ * OpenAI-compatible LLM provider.
  *
  * 基于官方文档 https://api-docs.deepseek.com/zh-cn/guides/tool_calls 与
  * https://api-docs.deepseek.com/zh-cn/guides/thinking_mode：
  *
- * - base_url 使用 /beta（strict 模式要求）
+ * - DeepSeek strict 模式使用 /beta；SoCLaaS 使用配置中的 /v1 根路径
  * - 非流式一次性返回（stream:false）
  * - 通过 tools 传入 strict function 定义；**思考模式下不能传 tool_choice**
  *   （官方样例仅传 tools，让模型自主调用；strict 模式 + 措辞强约束保证必调用）
@@ -17,22 +17,50 @@ import { LLMProvider } from './LLMProvider.js';
  * - usage 字段含 prompt_cache_hit_tokens / miss_tokens（KV Cache 监控）
  */
 export class OpenAICompatibleProvider extends LLMProvider {
-  constructor({ apiKey, baseUrl, model }) {
+  constructor({
+    apiKey,
+    baseUrl,
+    model,
+    provider = 'deepseek',
+    reasoningEffort,
+    timeoutMs,
+    maxRetries,
+  } = {}) {
     super();
     this.apiKey = apiKey || '';
-    // strict 模式要求 base_url 以 /beta 结尾
-    // 允许 .env 中配置 https://api.deepseek.com 或 https://api.deepseek.com/beta
-    const rawBase = (baseUrl || 'https://api.deepseek.com').replace(/\/$/, '');
-    this.baseUrl = rawBase.endsWith('/beta') ? rawBase : `${rawBase}/beta`;
-    this.model = model || 'deepseek-v4-pro';
+    this.provider = String(provider || 'deepseek').trim().toLowerCase();
+    this.isDeepSeek = this.provider === 'deepseek';
+
+    // DeepSeek strict mode requires /beta. SoCLaaS already exposes the
+    // OpenAI-compatible endpoint below /v1 and must not receive /beta.
+    const defaultBase = this.isDeepSeek
+      ? 'https://api.deepseek.com'
+      : (this.provider === 'soclaas' ? 'https://soclaas-api.comp.nus.edu.sg/v1' : 'https://api.openai.com/v1');
+    const rawBase = (baseUrl || defaultBase).replace(/\/+$/, '');
+    this.baseUrl = this.isDeepSeek && !rawBase.endsWith('/beta')
+      ? `${rawBase}/beta`
+      : rawBase;
+    this.model = model || (this.provider === 'soclaas' ? 'qwen3.8:27b' : 'deepseek-v4-pro');
+
+    const parsedTimeout = Number(timeoutMs ?? process.env.LLM_TIMEOUT_MS ?? 60_000);
+    this.timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 60_000;
+    const parsedRetries = Number(maxRetries ?? process.env.LLM_MAX_RETRIES ?? 2);
+    this.maxRetries = Number.isInteger(parsedRetries) && parsedRetries >= 0 ? parsedRetries : 2;
+
+    // SoCLaaS documents reasoning_effort rather than DeepSeek's thinking
+    // object. The default is deliberately "none" to match its quick-start
+    // request and to avoid assuming that every hosted model exposes reasoning.
+    this.reasoningEffort = this.provider === 'soclaas'
+      ? (reasoningEffort || process.env.SOCLAAS_REASONING_EFFORT || 'none')
+      : null;
     // 官方文档：thinking.type 合法值为 'enabled' / 'disabled'，'adaptive' 已废弃。
     // Flash 主要用于高频叙事/摘要；未明确配置时关闭思考链，避免每回合把大部分
     // 延迟消耗在 reasoning_content 上。需要严格推理时可在 .env 显式设为 enabled。
-    const configuredThinking = process.env.LLM_THINKING_TYPE;
+    const configuredThinking = this.isDeepSeek ? process.env.LLM_THINKING_TYPE : null;
     this.thinkingTypeExplicit = configuredThinking === 'enabled' || configuredThinking === 'disabled';
     this.thinkingType = this.thinkingTypeExplicit
       ? configuredThinking
-      : (String(this.model).toLowerCase().includes('flash') ? 'disabled' : 'enabled');
+      : (this.isDeepSeek && !String(this.model).toLowerCase().includes('flash') ? 'enabled' : 'disabled');
   }
 
   /**
@@ -45,7 +73,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
    */
   async generate(assembled) {
     if (!this.apiKey) {
-      throw new Error('LLM API Key 未配置，请在 backend/.env 中设置 LLM_API_KEY');
+      throw new Error('LLM API Key 未配置，请在 backend/.env 中设置 LLM_API_KEY 或 SOCLAAS_API_KEY');
     }
 
     const { messages, temperature, maxTokens, thinking, stop, tools, toolChoice, reasoningEffort, modelOverride } = assembled;
@@ -57,7 +85,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
     const effectiveThinkingType = this.thinkingTypeExplicit
       ? this.thinkingType
       : (String(effectiveModel).toLowerCase().includes('flash') ? 'disabled' : 'enabled');
-    const thinkingEnabled = thinking !== false && effectiveThinkingType === 'enabled';
+    const thinkingEnabled = this.isDeepSeek && thinking !== false && effectiveThinkingType === 'enabled';
 
     const body = {
       model: effectiveModel,
@@ -66,13 +94,20 @@ export class OpenAICompatibleProvider extends LLMProvider {
       stream: false,                            // ← 关闭流式
       // 移除 response_format —— strict 模式走 tools
       tools,                                    // ← strict function 定义
-      // DeepSeek V4 默认开启 thinking；非思考路径也必须显式发送 disabled，
-      // 否则下面的 tool_choice=required 会被服务端判定为 thinking + tool_choice，
-      // 从而返回 400（"Thinking mode does not support this tool_choice"）。
-      thinking: { type: thinkingEnabled ? 'enabled' : 'disabled' },
     };
 
-    if (thinkingEnabled) {
+    if (this.provider === 'soclaas') {
+      // SoCLaaS's documented OpenAI-compatible request shape uses
+      // reasoning_effort. Do not send DeepSeek's provider-specific thinking
+      // object; tool_choice is safe here because the default is "none".
+      body.reasoning_effort = this.reasoningEffort;
+      if (toolChoice && tools?.length) {
+        body.tool_choice = toolChoice;
+      }
+    } else if (thinkingEnabled) {
+      // DeepSeek V4 defaults to thinking; in thinking mode tool_choice is not
+      // supported, so only pass the tools list.
+      body.thinking = { type: 'enabled' };
       // 思考强度控制（官方文档：思考模式下默认 high，复杂 Agent 任务自动 max）
       if (reasoningEffort && (reasoningEffort === 'high' || reasoningEffort === 'max')) {
         body.reasoning_effort = reasoningEffort;
@@ -80,9 +115,12 @@ export class OpenAICompatibleProvider extends LLMProvider {
       // 思考模式下不支持 tool_choice（API 会返回 400），故不透传
       // 即使调用方误传 toolChoice，也在此显式忽略，避免 400 错误
     } else {
-      // 非思考模式（冷备份路径，目前调用方不会走到）：
+      // DeepSeek non-thinking mode:
+      // Explicitly disable thinking before sending tool_choice; otherwise
+      // DeepSeek V4 treats the request as thinking + tool_choice and rejects it.
+      body.thinking = { type: 'disabled' };
       // tool_choice='required' 强制 LLM 调用 strict function，避免 strict 失效时 LLM 走 content
-      if (toolChoice) {
+      if (toolChoice && tools?.length) {
         body.tool_choice = toolChoice;
       }
     }
@@ -97,7 +135,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
       body.stop = stop;
     }
 
-    const response = await fetch(url, {
+    const response = await this._fetchWithRetry(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -209,5 +247,41 @@ export class OpenAICompatibleProvider extends LLMProvider {
         finishReason: choice?.finish_reason || null,
       },
     };
+  }
+
+  /**
+   * Retry transient rate-limit/upstream failures while keeping a bounded
+   * timeout for every individual request.
+   */
+  async _fetchWithRetry(url, init) {
+    const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
+      try {
+        const canTimeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function';
+        const signal = canTimeout ? AbortSignal.timeout(this.timeoutMs) : undefined;
+        const response = await fetch(url, signal ? { ...init, signal } : init);
+
+        if (response.ok || !retryableStatuses.has(response.status) || attempt === this.maxRetries) {
+          return response;
+        }
+
+        const retryAfterHeader = response.headers?.get?.('retry-after');
+        const retryAfterSeconds = Number(retryAfterHeader);
+        const retryDelay = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+          ? Math.min(retryAfterSeconds * 1000, 10_000)
+          : Math.min(500 * (2 ** attempt), 4_000);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+      } catch (error) {
+        lastError = error;
+        if (attempt === this.maxRetries) {
+          throw new Error(`LLM API request failed after ${attempt + 1} attempt(s): ${error.message}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, Math.min(500 * (2 ** attempt), 4_000)));
+      }
+    }
+
+    throw lastError || new Error('LLM API request failed');
   }
 }

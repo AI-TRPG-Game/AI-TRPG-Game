@@ -86,6 +86,7 @@ function normalizeSession(session) {
     combat: session.combat ?? null,
     finalChoice: session.finalChoice ?? null,
     endingState: session.endingState ?? null,
+    finaleState: session.finaleState ?? null,
     createdAt: session.createdAt || now,
     updatedAt: session.updatedAt || now,
     sortOrder: session.sortOrder ?? Date.now(),

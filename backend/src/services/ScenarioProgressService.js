@@ -1,17 +1,17 @@
 const SUSPICION_STATES = [
-  { min: 8, id: 'crisis', label: 'crisis', effect: 'The opposition is acting openly; expect an immediate confrontation or seizure attempt.' },
-  { min: 6, id: 'obstructed', label: 'obstructed', effect: 'Suspects restrict access and may move or damage unprotected evidence.' },
-  { min: 3, id: 'watched', label: 'watched', effect: 'The investigator is being watched; investigative actions take 5 extra minutes.' },
-  { min: 0, id: 'unnoticed', label: 'unnoticed', effect: 'The investigation has not yet drawn organised attention.' },
+  { min: 8, id: 'crisis', label: '危机', effect: '对手已经公开行动，随时可能发生正面对抗或证据抢夺。' },
+  { min: 6, id: 'obstructed', label: '受阻', effect: '嫌疑人会限制调查，并可能转移或损坏尚未保全的证据。' },
+  { min: 3, id: 'watched', label: '被监视', effect: '调查者正受到监视，调查行动额外耗时5分钟。' },
+  { min: 0, id: 'unnoticed', label: '未引起注意', effect: '调查尚未引起有组织的警觉。' },
 ];
 
 const SAN_STATES = [
-  { min: 51, id: 'stable', label: 'stable', penaltyDice: 0 },
-  { min: 46, id: 'uneasy', label: 'uneasy', penaltyDice: 0 },
-  { min: 31, id: 'shaken', label: 'shaken', penaltyDice: 1 },
-  { min: 16, id: 'unstable', label: 'unstable', penaltyDice: 2 },
-  { min: 1, id: 'critical', label: 'critical', penaltyDice: 2 },
-  { min: 0, id: 'madness', label: 'madness', penaltyDice: 2 },
+  { min: 51, id: 'stable', label: '稳定', penaltyDice: 0 },
+  { min: 46, id: 'uneasy', label: '不安', penaltyDice: 0 },
+  { min: 31, id: 'shaken', label: '动摇', penaltyDice: 1 },
+  { min: 16, id: 'unstable', label: '不稳定', penaltyDice: 2 },
+  { min: 1, id: 'critical', label: '濒临崩溃', penaltyDice: 2 },
+  { min: 0, id: 'madness', label: '疯狂', penaltyDice: 2 },
 ];
 
 function toMinutes(value) {
