@@ -45,6 +45,7 @@ function normalizeSession(session) {
   return {
     id: session.id,
     title: session.title || '新剧本',
+    llmProfileId: session.llmProfileId ?? null,
     phase: session.phase || 'WORLD_SETTING',
     subState: recoveredSubState,
     openingDone: Boolean(session.openingDone),

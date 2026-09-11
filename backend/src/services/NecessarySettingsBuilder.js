@@ -1,7 +1,7 @@
 import { scenarioProgressService } from './ScenarioProgressService.js';
 
 export class NecessarySettingsBuilder {
-  build(session) {
+  build(session, { narrationProfile = null } = {}) {
     const lines = [
       '故事必要设定如下：',
       `世界观：${session.worldSettings || '（未设定）'}`,
@@ -89,8 +89,13 @@ export class NecessarySettingsBuilder {
         lines.push('==== GM-ONLY ACTIVE SCENE DIRECTIVE (highest priority for this turn) ====');
         lines.push(`Scene kind: ${session.activeScene.kind}; event=${session.activeScene.eventId}; outcome=${session.activeScene.outcome || 'pending'}; location=${sceneLocation?.name || session.activeScene.locationId || 'current location'}.`);
         lines.push(session.activeScene.instruction);
-        if (session.activeScene.playerCue) lines.push(`玩家至少必须感知到这一变化：${session.activeScene.playerCue}`);
-        lines.push('Integrate this development into the narration itself. Show only what the protagonist can perceive. Do not print event IDs, branch names, scheduler metadata, or a separate system-event announcement. If it interrupts the declared action, make the interruption clear and stop at the next meaningful player decision.');
+        if (session.activeScene.announcedAtBoundary) {
+          lines.push(`玩家在上一回合末尾已经感知到：${session.activeScene.playerCue}`);
+          lines.push('从玩家对该变化的回应开始继续，呈现新的后果；不要逐字重复或重新介绍上一回合已经显示的事件线索。');
+        } else {
+          if (session.activeScene.playerCue) lines.push(`玩家至少必须感知到这一变化：${session.activeScene.playerCue}`);
+          lines.push('Integrate this development into the narration itself. Show only what the protagonist can perceive. Do not print event IDs, branch names, scheduler metadata, or a separate system-event announcement. If it interrupts the declared action, make the interruption clear and stop at the next meaningful player decision.');
+        }
       }
       const activeTrauma = session.sanity?.activeTrauma;
       if (activeTrauma) lines.push(`Active acute trauma: ${activeTrauma.label}. ${activeTrauma.message}`);
@@ -105,7 +110,10 @@ export class NecessarySettingsBuilder {
           const progress = state?.secured ? 'secured' : state ? 'discovered-not-secured' : 'not-yet-discovered';
           const location = clue.locationId ? `；recommended location=${clue.locationId}` : '';
           const hint = clue.discoveryHint ? `；discovery hint=${clue.discoveryHint}` : '';
-          return `${id} [${progress}] source=${clue.source || 'unknown'}; description=${clue.description || ''}${location}${hint}`;
+          const preservation = state && !state.secured && clue.preservationHint
+            ? `；preservation hint=${clue.preservationHint}`
+            : '';
+          return `${id} [${progress}] source=${clue.source || 'unknown'}; description=${clue.description || ''}${location}${hint}${preservation}`;
         });
         lines.push('Authored evidence catalogue (award only when the player has actually found or secured it; use the exact ID):');
         lines.push(...clueLines);
@@ -114,6 +122,12 @@ export class NecessarySettingsBuilder {
       lines.push(`怀疑度：${session.suspicion ?? 0}/10。`);
       const secured = (session.evidence || []).filter(e => e.secured);
       if (secured.length) lines.push(`已保全证据：${secured.map(e => `${e.id}(${e.source})`).join('；')}。`);
+      if (narrationProfile) {
+        const profileText = narrationProfile === 'major'
+          ? '重大场景：700-1100个中文字符，约6-9个有信息量的段落。'
+          : '普通场景：450-750个中文字符，约4-6个有信息量的段落。若本轮触发检定actions，则改为200-400字并停在判定前。';
+        lines.push(`本轮叙事档位：${profileText}`);
+      }
     }
 
     return lines.join('\n');

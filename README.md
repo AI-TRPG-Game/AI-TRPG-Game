@@ -181,10 +181,30 @@ LLM_PROVIDER=soclaas
 SOCLAAS_API_KEY=your-soclaas-api-key
 SOCLAAS_BASE_URL=https://soclaas-api.comp.nus.edu.sg/v1
 SOCLAAS_MODEL=qwen3.8:27b
-SOCLAAS_REASONING_EFFORT=none
 ```
 
 可先用 SoCLaaS 返回的 `/v1/models` 列表确认模型名，再填入 `SOCLAAS_MODEL`。项目会使用 `/v1/chat/completions`，发送结构化 `tools`/`tool_calls` 输出协议，并不会把 DeepSeek 专用的 `/beta` 或 `thinking` 参数发给 SoCLaaS。若某个模型不支持工具调用，请换用支持 structured output/tool calling 的模型；这是本项目 JSON 状态协议所必需的。
+
+### 在游戏中切换模型
+
+API 密钥和服务地址只需在 `backend/.env` 配置一次。若要同时测试多个模型，可使用逗号分隔的模型列表：
+
+```env
+DEEPSEEK_API_KEY=your-deepseek-api-key
+DEEPSEEK_MODELS=deepseek-v4-pro,deepseek-v4-flash
+
+SOCLAAS_API_KEY=your-soclaas-api-key
+SOCLAAS_MODELS=qwen3.8:27b,another-tool-capable-model
+
+# 可选：侧栏模型选择器的默认项
+LLM_DEFAULT_PROFILE=soclaas:qwen3.8:27b
+```
+
+启动后，在左侧会话栏的“本会话使用的模型”中选择即可。选择结果随会话保存，普通剧本和“新手试炼”都会自动使用它；无需为不同剧本修改 `.env`。切换现有会话的模型会从下一次请求生效。
+
+DeepSeek 会始终显示在列表中；尚未配置 `DEEPSEEK_API_KEY` 时该选项为禁用状态，配置密钥并重启后会自动启用。模型列表在后端启动时从允许的 `.env` 配置生成，并非浏览器读取或展示 `.env`。
+
+后端会按模型能力和任务类型自动设置参数：Qwen 日常叙事与总结关闭额外推理，人物生成和结局适当增加推理预算；DeepSeek 只使用其 `thinking` 开关，绝不会收到 `reasoning_effort`。超时和输出预算也会按流程自动选择。浏览器只能获取模型名称与能力说明，不会收到 API Key 或服务端地址。
 
 启动方式不变：
 
@@ -192,7 +212,7 @@ SOCLAAS_REASONING_EFFORT=none
 npm run dev:all
 ```
 
-> 推荐使用 **DeepSeek v3/v4** 系列模型，性价比高且支持 JSON 输出模式。使用其他模型（如 GPT-4o）时将 `LLM_BASE_URL` 和 `LLM_MODEL` 改为对应值即可。
+> 推荐使用支持 structured output/tool calling 的模型。其他 OpenAI-compatible 服务仍可通过 `LLM_PROVIDER`、`LLM_BASE_URL` 和 `LLM_MODEL` 接入，并使用不包含厂商专用推理字段的安全兼容模式。
 >
 > `.env` 已被 `.gitignore` 排除，不会上传到 GitHub。你的 API Key 不会泄露。
 

@@ -1,5 +1,7 @@
 import { Phase, SubState } from './enums.js';
 import { BIRCH_STATION_ID, BIRCH_STATION_TUTORIAL } from '../scenarios/birchStation.js';
+import { playerFacingTextSanitizer } from '../services/PlayerFacingTextSanitizer.js';
+import { repairFinaleState } from './FinaleState.js';
 
 const RECOVERABLE_SUB_STATES = new Set([
   SubState.LLM_STREAMING,
@@ -10,6 +12,7 @@ export class GameSession {
   constructor(data = {}) {
     this.id = data.id ?? null;
     this.title = data.title ?? '新剧本';
+    this.llmProfileId = data.llmProfileId ?? null;
     this.phase = data.phase ?? Phase.WORLD_SETTING;
     this.subState = data.subState ?? SubState.AWAITING_INPUT;
     this.openingDone = data.openingDone ?? false;
@@ -58,6 +61,7 @@ export class GameSession {
 
     // === 数据迁移（向后兼容旧格式） ===
     this._migrateLegacyData();
+    playerFacingTextSanitizer.sanitizeSessionPresentation(this);
   }
 
   /**
@@ -150,6 +154,12 @@ export class GameSession {
         }
       }
     }
+
+    // A request may restore a save created by an older/interrupted build where
+    // the clock was already frozen but finaleState was never persisted. Repair
+    // that combination before input routing, otherwise every action falls back
+    // into ordinary narration forever.
+    repairFinaleState(this);
   }
 
   _migrateBirchStationLocations() {
@@ -197,6 +207,20 @@ export class GameSession {
       this.activeScene.playerCue = this.activeScene.kind === 'aftermath'
         ? (activeEvent?.aftermathPlayerCue || activeBranch?.aftermathPlayerCue)
         : activeBranch?.playerCue;
+    }
+    if (this.activeScene && !Array.isArray(this.activeScene.playerOptions)) {
+      const activeEvent = this.scheduledEvents.find(event => event.id === this.activeScene.eventId);
+      const activeBranch = activeEvent?.branches?.[this.activeScene.branchKey]
+        || activeEvent?.branches?.foreground;
+      this.activeScene.playerOptions = activeBranch?.playerOptions || [
+        'A. 立即观察这场变化的来源',
+        'B. 询问或提醒身边的人',
+        'C. 先保护自己与重要证据',
+        'D. 自由行动',
+      ];
+    }
+    if (this.activeScene && this.activeScene.announcedAtBoundary === undefined) {
+      this.activeScene.announcedAtBoundary = false;
     }
 
     if (!Array.isArray(this.locations)) this.locations = [];
@@ -274,6 +298,7 @@ export class GameSession {
     return {
       id: this.id,
       title: this.title,
+      llmProfileId: this.llmProfileId,
       phase: this.phase,
       subState: this.subState,
       openingDone: this.openingDone,

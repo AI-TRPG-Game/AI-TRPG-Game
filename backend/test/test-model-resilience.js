@@ -9,9 +9,25 @@ function assert(condition, message) {
   passed++;
 }
 
+function richNarration(opening = '你继续观察雨夜中的站台。') {
+  const beats = [
+    opening,
+    '雨水沿着站牌边缘连成细线，风把远处的汽笛声推回候车厅。你没有急着向前，而是先确认脚下泥水、门边刮痕和走廊里残留的气味，避免遗漏刚才行动造成的细微变化。',
+    '壁灯的光在玻璃上晃动，附近的人各自保持着不自然的沉默。有人刻意避开你的目光，也有人盯着你装证据的口袋；这些反应没有直接给出答案，却让彼此的立场比之前更加清楚。',
+    '你把已经确认的事实逐条记进随身笔记，并将推测与亲眼所见分开。这样做花费了一些时间，却保住了后续核对的可能，也使一段先前显得无关紧要的说辞重新进入调查范围。',
+    '列车连接处传来金属轻响，随后又被雨声掩盖。你循声看去，只来得及捕捉到一道退入阴影的轮廓。对方没有立刻现身，说明眼前仍有主动询问、保护资料或改变位置的机会。',
+    '空气里的煤烟味逐渐变重，候车厅外的积水也开始向排水沟回流。环境变化提示某处设备已经运转，而这与刚才听见的动静可能来自同一个方向，值得在下一步行动中验证。',
+    '你最后检查了一遍退路和身边人物的状态。当前行动已经取得明确结果，但更关键的问题仍需由你选择处理方式：继续追查声音来源，向在场者施压，或者先把手里的材料变成能够带离车站的可靠记录。',
+    '远处钟面被闪电照亮片刻，指针提醒你每一次停留都会压缩余下时间。你没有得到凭空出现的结论，只得到几条可以实际追踪的新方向，而下一次行动将决定其中哪一条能够留下证据。',
+    '门外忽然掠过一阵比雨声更整齐的脚步，停在看不见的位置。你侧耳分辨片刻，确认对方没有继续靠近，但这份克制本身就是警告：调查已经引起注意，接下来公开行动会付出更高代价。',
+    '你将现场重新划分为几个可以核验的部分，把尚未查清的痕迹留在原位，也给可能的证人留下退路。如此一来，无论选择追出去还是继续谈话，都不会让刚获得的信息因为仓促转身而彻底断线。',
+  ];
+  return beats.join('\n\n');
+}
+
 function narrative(overrides = {}) {
   return JSON.stringify({
-    narration: '你继续观察雨夜中的站台。',
+    narration: richNarration(),
     locations: [], npcs: [], items: [], actions: null,
     options: ['A. 观察环境', 'B. 询问乘客', 'C. 检查证据', 'D. 自由行动'],
     time_cost_minutes: 10,
@@ -56,7 +72,7 @@ function eventSession(id) {
         content: calls === 1
           ? narrative({ active_event_ack: { event_id: 'wrong', outcome: 'wrong', incorporated: true, perceived_consequence: '错误事件' } })
           : narrative({
-            narration: '喇叭里突然传出一段失真的中文警告。',
+            narration: richNarration('喇叭里突然传出一段失真的中文警告。'),
             active_event_ack: { event_id: 'broadcast', outcome: 'warning_heard', incorporated: true, perceived_consequence: '玩家听到了警告。' },
           }),
         reasoningContent: null, thinkingEnabled: false, hasToolCall: true,
@@ -94,6 +110,59 @@ function eventSession(id) {
   assert(result.refinedHtml.includes('喇叭里突然传出一段失真的中文警告'), 'fallback narration should contain the authored in-world cue');
   assert(saved.scheduledEvents[0].status === 'resolved', 'fallback event should commit after its cue is rendered');
   assert(result.debugLogs.some(log => log.type === 'event_fallback'), 'event fallback should be visible in diagnostics');
+}
+
+// A turn that crosses an event boundary appends the authored cue and choices
+// to that same response, but leaves resolution for the player's next action.
+{
+  const session = eventSession('boundary-cue');
+  session.scenarioClock.currentTime = '00:45';
+  session.scheduledEvents[0].at = '00:50';
+  session.scheduledEvents[0].status = 'dormant';
+  const provider = {
+    model: 'test-model',
+    async generate() {
+      return { content: narrative({ time_cost_minutes: 10 }), reasoningContent: null, thinkingEnabled: false, hasToolCall: true };
+    },
+  };
+  const repository = new RequestSessionRepository(session.toJSON());
+  const orchestrator = new GameOrchestrator({ repository, llmProvider: provider });
+  const result = await orchestrator._runLlmFlow(repository.findById(session.id), FlowType.NARRATION_I, '我继续等待并观察');
+  const saved = repository.findById(session.id);
+  assert(result.refinedHtml.includes('喇叭里突然传出一段失真的中文警告'), 'crossed cue should appear in the same rendered response');
+  assert(result.parsed.options[0].includes('观察') && saved.optionBuffer.includes('D. 自由行动'), 'crossed event should replace ordinary choices with authored response choices');
+  assert(saved.activeScene?.announcedAtBoundary && saved.scheduledEvents[0].status === 'queued' && !saved.scheduledEvents[0].fired, 'boundary event should remain unresolved until the next player action');
+  assert(result.debugLogs.some(log => log.type === 'event_boundary_staged'), 'same-response boundary staging should be visible in diagnostics');
+}
+
+// Narration length is a soft quality guarantee with one rewrite. A short but
+// structurally safe response remains playable without paying for a third call.
+{
+  const session = eventSession('length-fallback');
+  session.scheduledEvents = [];
+  let calls = 0;
+  const provider = {
+    model: 'test-model',
+    async generate() {
+      calls++;
+      return {
+        content: narrative({ narration: '你检查了门边，确认走廊暂时安全。' }),
+        reasoningContent: null, thinkingEnabled: false, hasToolCall: true,
+      };
+    },
+  };
+  const repository = new RequestSessionRepository(session.toJSON());
+  const orchestrator = new GameOrchestrator({ repository, llmProvider: provider });
+  const result = await orchestrator._runLlmFlow(repository.findById(session.id), FlowType.NARRATION_I, '我等待片刻');
+  assert(calls === 2 && result.refinedHtml.includes('确认走廊暂时安全'), 'persistently short safe narration should retry once and then remain playable');
+  assert(result.debugLogs.some(log => log.type === 'narration_length_validation_failed')
+    && result.debugLogs.some(log => log.type === 'narration_length_fallback'), 'length retry and fallback should be visible in diagnostics');
+
+  const preDice = JSON.parse(narrative({
+    narration: '你把手掌贴在冰冷门板上，先听见门后有缓慢而克制的呼吸声。走廊灯光被风吹得摇晃，许薇退到墙边，为你留出接近门锁的位置。你检查锁舌与门框，发现刮痕还很新，若要在不惊动里面那个人的情况下打开搭扣，必须控制工具碰撞的声音。雨点敲打车顶，掩护了最轻微的金属摩擦，却也让你难以判断门后的人是否移动。许薇屏住呼吸，指向锁舌下方一道更深的划痕，提醒你那里可能是受力点。你握稳细铁片，沿缝隙试探阻力；真正结果仍取决于接下来的动作是否足够精准。',
+    actions: [{ action_type: 'skill_check', trigger: 'player' }], options: null,
+  }));
+  assert(orchestrator._validateFlowSemantics(repository.findById(session.id), FlowType.NARRATION_I, preDice, 'major').ok, 'valid shorter pre-dice setup should not be forced to major-scene length');
 }
 
 // An incomplete, cliffhanger ending is rejected three times and replaced with

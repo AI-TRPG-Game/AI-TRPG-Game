@@ -14,6 +14,9 @@ const SAN_STATES = [
   { min: 0, id: 'madness', label: '疯狂', penaltyDice: 2 },
 ];
 
+const DISCOVERY_INTENT = /检查|查看|观察|搜索|搜查|调查|翻找|比对|核对|询问|追问|检验|分析|inspect|examine|search|investigate|compare|question|analy[sz]e/i;
+const PRESERVATION_INTENT = /拍照|摄影|录像|录音|抄录|誊写|复制|复印|拓印|拓片|取样|采样|收集|拾取|捡起|包起|装袋|封存|密封|保存|保全|取得|收起|带走|交给.{0,8}(?:可信|警方|报社|同伴)|photograph|record|copy|rub(?:bing)?|sample|collect|pick\s*up|bag|seal|preserve|secure|take\s+away/i;
+
 function toMinutes(value) {
   const match = /^(\d{2}):(\d{2})$/.exec(value || '');
   return match ? Number(match[1]) * 60 + Number(match[2]) : null;
@@ -147,15 +150,15 @@ export class ScenarioProgressService {
     if (!catalog || typeof catalog !== 'object' || typeof userText !== 'string') return [];
     const text = userText.trim().toLowerCase();
     if (!text) return [];
-    const investigativeIntent = /检查|查看|观察|搜索|搜查|调查|翻找|比对|核对|询问|追问|记录|录音|拍照|保全|取得|拿走|检验|分析|inspect|examine|search|investigate|compare|question|record|preserve|secure/i;
-    if (!investigativeIntent.test(text)) return [];
+    const isDiscovery = DISCOVERY_INTENT.test(text);
+    const isPreservation = PRESERVATION_INTENT.test(text);
+    if (!isDiscovery && !isPreservation) return [];
     const currentLocationId = session.playerLocationId;
-    const existingIds = new Set((session.evidence || [])
-      .filter(evidence => evidence.discovered !== false)
-      .map(evidence => evidence.id));
     return Object.entries(catalog)
       .filter(([id, clue]) => {
-        if (existingIds.has(id)) return false;
+        const existing = (session.evidence || []).find(evidence => evidence.id === id);
+        if (existing?.secured) return false;
+        if (existing && existing.discovered !== false && !isPreservation) return false;
         const allowedLocations = Array.isArray(clue.locationIds)
           ? clue.locationIds
           : (clue.locationId ? [clue.locationId] : []);
@@ -163,7 +166,18 @@ export class ScenarioProgressService {
         const keywords = Array.isArray(clue.keywords) ? clue.keywords : [];
         return keywords.some(keyword => text.includes(String(keyword).toLowerCase()));
       })
-      .map(([id]) => ({ id, secured: false }));
+      .map(([id]) => ({ id, secured: isPreservation }));
+  }
+
+  canSecureEvidence(session, evidenceId, userText = '') {
+    const clue = session.scenarioRules?.clueCatalog?.[evidenceId];
+    if (!clue) return false;
+    const text = String(userText || '').trim().toLowerCase();
+    if (!text) return false;
+    const keywords = [clue.source, ...(clue.keywords || [])]
+      .filter(Boolean)
+      .map(value => String(value).toLowerCase());
+    return PRESERVATION_INTENT.test(text) && keywords.some(keyword => text.includes(keyword));
   }
 
   getEvidenceProgress(session) {

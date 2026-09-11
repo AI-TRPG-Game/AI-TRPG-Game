@@ -11,6 +11,26 @@ export function getScenarioPhaseLabel(phase = '') {
     || (phase ? '未知阶段' : '未知阶段');
 }
 
+export function getGamePhaseLabel(phase = '') {
+  return ({
+    WORLD_SETTING: '世界观设定',
+    CHARACTER_SETTING: '角色设定',
+    KEY_CHARACTER_SETTING: '关键角色设定',
+    STORY_PLAY: '故事进行中',
+  })[phase] || '未知阶段';
+}
+
+export function getGameSubStateLabel(subState = '') {
+  return ({
+    AWAITING_INPUT: '等待行动',
+    LLM_STREAMING: '主持人思考中',
+    DICE_PENDING: '等待检定确认',
+    SUMMARIZING: '整理剧情中',
+    ENDING_PENDING: '生成结局中',
+    RESTART_PENDING: '本局已结束',
+  })[subState] || '未知状态';
+}
+
 export function getSanLabel(value) {
   if (value == null) return '状态不明';
   if (value >= 51) return '稳定';
@@ -32,4 +52,39 @@ export function getNpcCondition(npc = {}) {
         ? '受伤'
         : '重伤';
   return `${health} | ${getSanLabel(npc.san)}`;
+}
+
+export function sanitizePlayerText(session = {}, value = '') {
+  if (typeof value !== 'string' || !value) return value;
+  const replacements = new Map();
+  for (const location of session.locations || []) replacements.set(location.id, location.name || '某处地点');
+  for (const evidence of session.evidence || []) replacements.set(evidence.id, evidence.source || '一项线索');
+  for (const [id, clue] of Object.entries(session.scenarioRules?.clueCatalog || {})) {
+    if (!replacements.has(id)) replacements.set(id, clue.source || '一项线索');
+  }
+  for (const npc of session.npcs || []) replacements.set(npc.id, npc.visibility === 'hidden' ? '某人' : (npc.name || '某人'));
+  for (const item of session.inventory || []) replacements.set(item.id, item.name || '一件物品');
+  let text = value.replace(/(?:&#x20;|&#32;|&nbsp;)/gi, ' ');
+  for (const [id, readable] of replacements) {
+    if (!id || !readable) continue;
+    const escapePattern = input => String(input).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    text = text.replace(
+      new RegExp(`${escapePattern(readable)}\\s*[（(]\\s*${escapePattern(id)}\\s*[）)]`, 'gi'),
+      readable
+    );
+  }
+  return text
+    .replace(/\b(?:loc|evidence|npc|item)_\d{3,}\b/gi, id => replacements.get(id) || (
+      id.startsWith('loc_') ? '某处地点'
+        : id.startsWith('evidence_') ? '一项线索'
+          : id.startsWith('npc_') ? '某人' : '一件物品'
+    ))
+    .replace(/[ \t]+(?=\r?\n|$)/g, '');
+}
+
+export function sanitizePlayerPresentation(session = {}) {
+  session.optionBuffer = sanitizePlayerText(session, session.optionBuffer || '');
+  for (const entry of session.displayLog || []) entry.content = sanitizePlayerText(session, entry.content);
+  for (const entry of session.chatRecord || []) entry.content = sanitizePlayerText(session, entry.content);
+  return session;
 }

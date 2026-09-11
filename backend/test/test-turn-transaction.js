@@ -9,6 +9,20 @@ function assert(condition, message) {
   passed++;
 }
 
+function richNarration(opening) {
+  return [
+    opening,
+    '汽笛的余音沿着潮湿墙壁反复回荡，顶灯在风雨里明灭不定。你先稳住呼吸，确认身后的出口仍然可以通行，也记下对手与证据之间的距离，没有让突如其来的变化抹掉先前掌握的线索。',
+    '对面的人没有马上追击。他的视线先落到你的内袋，又移向站台尽头，迟疑暴露了真正目标并非伤害你，而是阻止那些记录离开白桦站。这个短暂停顿给了你调整位置的机会，也让双方的意图变得更清楚。',
+    '雨水从破裂窗框斜吹进来，地面积水映出摇晃人影。你借着列车震动挪到立柱旁，既避开正面冲撞，又让手中的资料远离火源。远处传来乘务员关门的喊声，意味着可用路线正在迅速减少。',
+    '许薇在门后短促地提醒了一句，声音被汽笛切碎，却足以指出侧面的狭窄通道。你没有替她作决定，只确认她暂时能够行动；她的反应也证明对手尚未控制整段走廊，局势仍有可以利用的缝隙。',
+    '你迅速复盘刚才的动作，把擦伤、遗落物和每个人站立的位置一一对应。几处细节互相印证：有人提前熟悉停电后的路线，也有人直到汽笛响起才改变立场。它们还不是完整答案，却足以排除最轻易的谎言。',
+    '列车轮下传来缓慢而沉重的咬合声，像整座车站终于从睡梦中翻身。冷风卷着煤灰穿过门缝，提醒你时间已经无法追回。你把能够复核的资料重新收好，并确认最脆弱的一页没有在冲突中遗失。',
+    '走廊另一端出现短暂的人影，随后又退回昏暗处。那个人没有靠近，却显然在等待你的选择。你意识到下一步不只影响自己能否离开，也会决定证人是否敢开口，以及剩余记录能不能撑过这场雨。',
+    '当最后一阵金属摩擦声停下，你已经看清下一步的代价：继续纠缠可能失去登车窗口，贸然撤退又会暴露证据所在。眼前危险得到了阶段性结果，但接下来仍需在保护资料、争取证人和安全撤离之间作出明确选择。',
+  ].join('\n\n');
+}
+
 const initial = new GameSession({
   id: 'turn-transaction',
   phase: 'STORY_PLAY',
@@ -58,13 +72,38 @@ assert(restored.scenarioClock.currentTime === '02:30' && restored.scenarioClock.
 assert(restored.scheduledEvents[0].status === 'dormant' && !restored.activeScene, 'cancel should restore event lifecycle state');
 assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel should restore scenario flags and deliberately clear stale choices');
 
+// If the previous committed turn announced an event at a time boundary, a
+// canceled response action must return to that announced, unresolved scene.
+{
+  const announced = new GameSession({
+    id: 'boundary-rollback', phase: 'STORY_PLAY', subState: 'AWAITING_INPUT',
+    scenarioId: 'test', scenarioClock: { currentTime: '01:15', deadline: '06:00', turn: 3, phase: 'investigation', mode: 'normal' },
+    playerLocationId: 'loc_001', locations: [{ id: 'loc_001', name: '走廊' }],
+    npcs: [{ id: 'npc_000', name: '玩家', importance: 'player', hp: 10, maxHp: 10, san: 50, maxSan: 50 }],
+    scheduledEvents: [{ id: 'blackout', at: '01:10', status: 'queued', fired: false, placement: { mode: 'global' }, branches: { foreground: { outcome: 'dark' } } }],
+    activeScene: { kind: 'foreground', eventId: 'blackout', branchKey: 'foreground', outcome: 'dark', locationId: 'loc_001', playerCue: '灯光骤灭。', announcedAtBoundary: true },
+    evidence: [], scenarioFlags: {}, suspicion: 0,
+  });
+  const announcedRepo = new RequestSessionRepository(announced.toJSON());
+  const announcedOrchestrator = new GameOrchestrator({ repository: announcedRepo, llmProvider: {} });
+  const announcedSession = announcedRepo.findById(announced.id);
+  const announcedRollback = announcedOrchestrator._captureTurnRollback(announcedSession);
+  announcedSession.activeScene = null;
+  announcedSession.scheduledEvents[0].status = 'resolved';
+  announcedSession.scheduledEvents[0].fired = true;
+  announcedSession.subState = SubState.DICE_PENDING;
+  announcedSession.pendingDiceFlow = { actions: [], rollbackState: announcedRollback, rollbackChatLen: 0, rollbackDisplayLen: 0 };
+  const canceled = announcedOrchestrator.cancelDice(announced.id).session;
+  assert(canceled.activeScene?.announcedAtBoundary && canceled.scheduledEvents[0].status === 'queued' && !canceled.scheduledEvents[0].fired, 'dice cancellation should preserve the previously announced boundary scene');
+}
+
 // A confirmed check must receive its NARRATION_II result before a crossed
 // deadline enters the finale gate. Active danger continues at a frozen 06:00;
 // only a later explicit final choice is allowed to start ENDING_GEN.
 {
   const calls = [];
   const activeEventNarration = JSON.stringify({
-    narration: '检定已经完成，行动后果在这里落定，但眼前的对手仍在逼近。',
+    narration: richNarration('检定已经完成，行动后果在这里落定，但眼前的对手仍在逼近。'),
     locations: [], npcs: [], items: [], actions: null,
     options: ['A. 处理证据', 'B. 登车', 'C. 留下', 'D. 自由行动'],
     time_cost_minutes: 0, time_cost_rationale: '', evidence_changes: [],
@@ -74,7 +113,7 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
     active_event_ack: { event_id: 'last_action_event', outcome: 'last_action', incorporated: true, perceived_consequence: '对手仍在逼近。' },
   });
   const resolvedDangerNarration = JSON.stringify({
-    narration: '你借着汽笛声摆脱围堵，眼前的直接危险终于结束。',
+    narration: richNarration('你借着汽笛声摆脱围堵，眼前的直接危险终于结束。'),
     locations: [], npcs: [], items: [], actions: null,
     options: ['A. 继续调查', 'B. 查看车站', 'C. 休息', 'D. 自由行动'],
     time_cost_minutes: 30, time_cost_rationale: '突破围堵', evidence_changes: [],
@@ -190,6 +229,58 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
   assert(noCombatCalls.join(',') === 'NARRATION_I', 'no-combat deadline turn should not invoke ending generation');
   assert(directResponse.session.finaleState.stage === 'decision' && directResponse.session.optionBuffer.includes('最终决定'), 'no-combat deadline should enter the decision stage immediately');
   assert(!directResponse.result.refinedHtml.includes('继续调查'), 'no-combat deadline should discard ordinary model options immediately');
+
+  // A persisted session from an older/interrupted build may have a frozen
+  // finale clock but no finaleState. It must interpret the action the player
+  // actually saw and go straight to ENDING_GEN instead of narrating it again.
+  const repairedSeed = noCombatSeed;
+  repairedSeed.id = 'repaired-stuck-finale';
+  repairedSeed.scenarioClock = { currentTime: '06:00', deadline: '06:00', turn: 20, phase: 'finale', mode: 'finale' };
+  repairedSeed.finaleState = null;
+  repairedSeed.optionBuffer = 'A. 登上雾港号，带着采访包离开白桦站\nB. 留在站务楼等待\nC. 追入地下\nD. 自由行动';
+  repairedSeed.chatRecord = [];
+  repairedSeed.displayLog = [];
+  const repairedCalls = [];
+  const repairedProvider = {
+    model: 'test-model',
+    async generate(assembled) {
+      repairedCalls.push(assembled.flowType);
+      return { content: endingResult, reasoningContent: null, thinkingEnabled: false, hasToolCall: true };
+    },
+  };
+  const repairedRepo = new RequestSessionRepository(repairedSeed);
+  const repairedOrchestrator = new GameOrchestrator({ repository: repairedRepo, llmProvider: repairedProvider });
+  const repairedResponse = await repairedOrchestrator.handleMessage(repairedSeed.id, '选项A');
+  assert(repairedCalls.join(',') === 'ENDING_GEN', 'a repaired finale choice must bypass ordinary narration');
+  assert(repairedResponse.session.finalChoice === 'withdraw' && repairedResponse.session.finaleState.stage === 'complete', 'a stale visible boarding choice must retain its withdrawal meaning and complete the ending');
+
+  // If no old option text survived, exact A/B/C/D input still maps against the
+  // authoritative finale choices instead of producing an endless re-prompt.
+  const missingBufferSeed = { ...repairedSeed, id: 'repaired-empty-buffer', optionBuffer: '', finaleState: null, finalChoice: null, endingState: null, subState: 'AWAITING_INPUT', chatRecord: [], displayLog: [] };
+  const missingBufferCalls = [];
+  const missingBufferProvider = {
+    model: 'test-model',
+    async generate(assembled) {
+      missingBufferCalls.push(assembled.flowType);
+      return { content: endingResult, reasoningContent: null, thinkingEnabled: false, hasToolCall: true };
+    },
+  };
+  const missingBufferRepo = new RequestSessionRepository(missingBufferSeed);
+  const missingBufferOrchestrator = new GameOrchestrator({ repository: missingBufferRepo, llmProvider: missingBufferProvider });
+  const missingBufferResponse = await missingBufferOrchestrator.handleMessage(missingBufferSeed.id, '选项A');
+  assert(missingBufferCalls.join(',') === 'ENDING_GEN' && missingBufferResponse.session.finalChoice === 'expose', 'bare finale option A must be recognized without relying on a persisted option buffer');
+
+  const idempotentRepo = new RequestSessionRepository(missingBufferSeed);
+  const idempotentOrchestrator = new GameOrchestrator({ repository: idempotentRepo, llmProvider: {} });
+  const idempotentSession = idempotentRepo.findById(missingBufferSeed.id);
+  idempotentSession.finaleState = null;
+  idempotentSession.optionBuffer = '';
+  idempotentSession.displayLog = [];
+  idempotentSession.chatRecord = [];
+  idempotentOrchestrator._enterFinale(idempotentSession, {});
+  idempotentOrchestrator._enterFinale(idempotentSession, {});
+  assert(idempotentSession.finaleState.stage === 'decision' && idempotentSession.optionBuffer.includes('最终决定'), 'idempotent finale entry must repair missing decision state');
+  assert(idempotentSession.displayLog.filter(entry => entry.content?.includes('【终局抉择】')).length === 1, 'idempotent finale entry must not duplicate the decision announcement');
 }
 
 console.log(`${passed} passed`);

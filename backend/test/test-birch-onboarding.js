@@ -28,6 +28,27 @@ const migrated = new GameSession({
 assert(migrated.scenarioClock.mode === 'normal' && migrated.finaleState === null, 'older saves should migrate to normal clock mode with no finale state');
 assert(migrated.scheduledEvents[0].branches.foreground.playerCue && migrated.activeScene.playerCue, 'older Birch Station event snapshots should regain authored player cues');
 
+const stuckFinale = new GameSession({
+  scenarioId: definition.id,
+  scenarioRules: structuredClone(definition.scenarioRules),
+  scenarioClock: { currentTime: '06:00', deadline: '06:00', turn: 20, phase: 'aftermath', mode: 'finale' },
+  finaleState: null,
+  optionBuffer: 'A. 登上雾港号离开白桦站\nB. 等待\nC. 追下去\nD. 自由行动',
+  combat: null,
+  locations: structuredClone(definition.locations),
+});
+assert(stuckFinale.finaleState?.stage === 'decision', 'a frozen legacy finale must recover into the decision stage');
+assert(stuckFinale.optionBuffer.startsWith('A. 登上雾港号'), 'recovery should preserve one visible legacy choice buffer for semantic interpretation');
+
+const emptyFinale = new GameSession({
+  scenarioClock: { currentTime: '06:00', deadline: '06:00', turn: 20, phase: 'aftermath', mode: 'normal' },
+  finaleState: null,
+  optionBuffer: '',
+  combat: null,
+});
+assert(emptyFinale.scenarioClock.mode === 'finale' && emptyFinale.finaleState?.stage === 'decision', 'a save at the deadline must enter finale mode even if its old mode was normal');
+assert(emptyFinale.optionBuffer.includes('最终决定：公开真相'), 'a recovered finale without choices must receive canonical final choices');
+
 const service = new ScenarioProgressService();
 const session = {
   scenarioRules: definition.scenarioRules,

@@ -11,7 +11,7 @@ import { LLMProvider } from './LLMProvider.js';
  * - 通过 tools 传入 strict function 定义；**思考模式下不能传 tool_choice**
  *   （官方样例仅传 tools，让模型自主调用；strict 模式 + 措辞强约束保证必调用）
  * - thinking.type 合法值为 'enabled' / 'disabled'（'adaptive' 已废弃）；Flash 未显式配置时默认关闭
- * - reasoning_effort: 'high' / 'max'（思考强度控制，按 FlowType 分层）
+ * - reasoning_effort 只发送给明确声明支持它的模型配置
  * - 输出从 message.tool_calls[0].function.arguments 解析；若无 tool_calls 则退回 content
  * - reasoning_content 在工具调用场景下必须回传（官方要求），由调用方持久化到 chatRecord
  * - usage 字段含 prompt_cache_hit_tokens / miss_tokens（KV Cache 监控）
@@ -25,6 +25,10 @@ export class OpenAICompatibleProvider extends LLMProvider {
     reasoningEffort,
     timeoutMs,
     maxRetries,
+    capabilities = {},
+    flowPolicies = {},
+    id = null,
+    label = null,
   } = {}) {
     super();
     this.apiKey = apiKey || '';
@@ -41,6 +45,16 @@ export class OpenAICompatibleProvider extends LLMProvider {
       ? `${rawBase}/beta`
       : rawBase;
     this.model = model || (this.provider === 'soclaas' ? 'qwen3.8:27b' : 'deepseek-v4-pro');
+    this.profileId = id;
+    this.label = label || this.model;
+    this.capabilities = {
+      reasoningEffort: this.provider === 'soclaas',
+      deepseekThinking: this.isDeepSeek,
+      reasoningHistory: this.isDeepSeek,
+      toolChoice: true,
+      ...capabilities,
+    };
+    this.flowPolicies = flowPolicies && typeof flowPolicies === 'object' ? flowPolicies : {};
 
     const parsedTimeout = Number(timeoutMs ?? process.env.LLM_TIMEOUT_MS ?? 60_000);
     this.timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 60_000;
@@ -64,7 +78,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
   }
 
   /**
-   * 非流式生成（strict 模式 + 思考模式）。
+   * 非流式生成（strict 模式 + 按模型能力选择可选推理参数）。
    * @param {Object} assembled - InputAssembler.assemble() 的返回值
    *   新增字段：
    *   - reasoningEffort?: 'high' | 'max' —— 思考强度（思考模式下生效）
@@ -76,21 +90,40 @@ export class OpenAICompatibleProvider extends LLMProvider {
       throw new Error('LLM API Key 未配置，请在 backend/.env 中设置 LLM_API_KEY 或 SOCLAAS_API_KEY');
     }
 
-    const { messages, temperature, maxTokens, thinking, stop, tools, toolChoice, reasoningEffort, modelOverride } = assembled;
+    const { messages, temperature, maxTokens, thinking, stop, tools, toolChoice, reasoningEffort, modelOverride, flowType } = assembled;
     const url = `${this.baseUrl}/chat/completions`;
+    const flowPolicy = this.flowPolicies[flowType] || {};
+    const requestMaxTokens = flowPolicy.maxTokens ?? maxTokens ?? 4096;
+    const requestTimeoutMs = flowPolicy.timeoutMs ?? this.timeoutMs;
+    const timeoutRetries = Number.isInteger(flowPolicy.timeoutRetries)
+      ? Math.max(0, flowPolicy.timeoutRetries)
+      : 0;
 
     // thinking 模式：默认按全局开关（this.thinkingType）启用
     // Flash 默认走非思考模式以减少延迟；显式 LLM_THINKING_TYPE=enabled 时仍可启用思考链。
     const effectiveModel = modelOverride || this.model;
+    const policyThinking = typeof flowPolicy.thinking === 'boolean' ? flowPolicy.thinking : null;
     const effectiveThinkingType = this.thinkingTypeExplicit
       ? this.thinkingType
-      : (String(effectiveModel).toLowerCase().includes('flash') ? 'disabled' : 'enabled');
-    const thinkingEnabled = this.isDeepSeek && thinking !== false && effectiveThinkingType === 'enabled';
+      : (policyThinking !== null
+        ? (policyThinking ? 'enabled' : 'disabled')
+        : (String(effectiveModel).toLowerCase().includes('flash') ? 'disabled' : 'enabled'));
+    const thinkingEnabled = this.capabilities.deepseekThinking
+      && thinking !== false
+      && effectiveThinkingType === 'enabled';
+    const configuredReasoningEffort = flowPolicy.reasoningEffort ?? reasoningEffort ?? this.reasoningEffort;
+    const requestedReasoningEffort = this.capabilities.reasoningEffort
+      ? configuredReasoningEffort
+      : null;
+    const reasoningRequested = requestedReasoningEffort && requestedReasoningEffort !== 'none';
+    const requestMessages = this.capabilities.reasoningHistory
+      ? messages
+      : messages.map(({ reasoning_content: _reasoningContent, ...message }) => message);
 
     const body = {
       model: effectiveModel,
-      messages,
-      max_tokens: maxTokens ?? 4096,
+      messages: requestMessages,
+      max_tokens: requestMaxTokens,
       stream: false,                            // ← 关闭流式
       // 移除 response_format —— strict 模式走 tools
       tools,                                    // ← strict function 定义
@@ -100,27 +133,33 @@ export class OpenAICompatibleProvider extends LLMProvider {
       // SoCLaaS's documented OpenAI-compatible request shape uses
       // reasoning_effort. Do not send DeepSeek's provider-specific thinking
       // object; tool_choice is safe here because the default is "none".
-      body.reasoning_effort = this.reasoningEffort;
-      if (toolChoice && tools?.length) {
+      if (this.capabilities.reasoningEffort && requestedReasoningEffort) {
+        body.reasoning_effort = requestedReasoningEffort;
+      }
+      if (this.capabilities.toolChoice && toolChoice && tools?.length) {
         body.tool_choice = toolChoice;
       }
-    } else if (thinkingEnabled) {
+    } else if (this.isDeepSeek && thinkingEnabled) {
       // DeepSeek V4 defaults to thinking; in thinking mode tool_choice is not
       // supported, so only pass the tools list.
       body.thinking = { type: 'enabled' };
-      // 思考强度控制（官方文档：思考模式下默认 high，复杂 Agent 任务自动 max）
-      if (reasoningEffort && (reasoningEffort === 'high' || reasoningEffort === 'max')) {
-        body.reasoning_effort = reasoningEffort;
-      }
+      // DeepSeek V4 uses its thinking switch. Do not send reasoning_effort:
+      // it is not part of the DeepSeek-compatible request contract.
       // 思考模式下不支持 tool_choice（API 会返回 400），故不透传
       // 即使调用方误传 toolChoice，也在此显式忽略，避免 400 错误
-    } else {
+    } else if (this.isDeepSeek) {
       // DeepSeek non-thinking mode:
       // Explicitly disable thinking before sending tool_choice; otherwise
       // DeepSeek V4 treats the request as thinking + tool_choice and rejects it.
       body.thinking = { type: 'disabled' };
       // tool_choice='required' 强制 LLM 调用 strict function，避免 strict 失效时 LLM 走 content
-      if (toolChoice && tools?.length) {
+      if (this.capabilities.toolChoice && toolChoice && tools?.length) {
+        body.tool_choice = toolChoice;
+      }
+    } else {
+      // Conservative OpenAI-compatible fallback: omit vendor-specific
+      // reasoning fields and only use standard tool selection when supported.
+      if (this.capabilities.toolChoice && toolChoice && tools?.length) {
         body.tool_choice = toolChoice;
       }
     }
@@ -142,14 +181,14 @@ export class OpenAICompatibleProvider extends LLMProvider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
-    });
+    }, { timeoutMs: requestTimeoutMs, timeoutRetries });
 
     // 方案 B+ 诊断日志：打印实际发送的 messages 结构（重点看 tool_calls 历史消息）
     // 用于实测验证 DeepSeek API 是否正常处理 tool_calls 历史消息
     if (process.env.LLM_DEBUG_MESSAGES === '1') {
       console.log('[LLM 诊断] 发送到 API 的 messages 结构:');
-      for (let i = 0; i < messages.length; i++) {
-        const m = messages[i];
+      for (let i = 0; i < requestMessages.length; i++) {
+        const m = requestMessages[i];
         const contentPreview = typeof m.content === 'string'
           ? m.content.slice(0, 100)
           : m.content;
@@ -218,7 +257,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
       return {
         content: fallback,
         reasoningContent,
-        thinkingEnabled,
+        thinkingEnabled: thinkingEnabled || reasoningRequested || Boolean(reasoningContent),
         usage,
         toolCallId: null,
         hasToolCall: false,
@@ -228,6 +267,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
           reasoningLen,
           contentHead,
           finishReason: choice?.finish_reason || null,
+          requestPolicy: { maxTokens: requestMaxTokens, timeoutMs: requestTimeoutMs, reasoningEffort: requestedReasoningEffort || null, thinking: thinkingEnabled },
         },
       };
     }
@@ -235,7 +275,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
     return {
       content: toolCall.function.arguments,
       reasoningContent,
-      thinkingEnabled,
+      thinkingEnabled: thinkingEnabled || reasoningRequested || Boolean(reasoningContent),
       usage,
       toolCallId: toolCall.id || null,
       hasToolCall: true,
@@ -245,6 +285,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
         reasoningLen: reasoningContent ? reasoningContent.length : 0,
         contentHead: (toolCall.function.arguments || '').slice(0, 500),
         finishReason: choice?.finish_reason || null,
+        requestPolicy: { maxTokens: requestMaxTokens, timeoutMs: requestTimeoutMs, reasoningEffort: requestedReasoningEffort || null, thinking: thinkingEnabled },
       },
     };
   }
@@ -253,14 +294,15 @@ export class OpenAICompatibleProvider extends LLMProvider {
    * Retry transient rate-limit/upstream failures while keeping a bounded
    * timeout for every individual request.
    */
-  async _fetchWithRetry(url, init) {
+  async _fetchWithRetry(url, init, { timeoutMs = this.timeoutMs, timeoutRetries = 0 } = {}) {
     const retryableStatuses = new Set([429, 500, 502, 503, 504]);
     let lastError = null;
+    let timedOutAttempts = 0;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt += 1) {
       try {
         const canTimeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function';
-        const signal = canTimeout ? AbortSignal.timeout(this.timeoutMs) : undefined;
+        const signal = canTimeout ? AbortSignal.timeout(timeoutMs) : undefined;
         const response = await fetch(url, signal ? { ...init, signal } : init);
 
         if (response.ok || !retryableStatuses.has(response.status) || attempt === this.maxRetries) {
@@ -275,6 +317,15 @@ export class OpenAICompatibleProvider extends LLMProvider {
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       } catch (error) {
         lastError = error;
+        const timedOut = error?.name === 'TimeoutError'
+          || error?.name === 'AbortError'
+          || /aborted due to timeout|timed?\s*out/i.test(String(error?.message || ''));
+        if (timedOut) {
+          timedOutAttempts += 1;
+          if (timedOutAttempts > timeoutRetries) {
+            throw new Error(`LLM API request timed out after ${timeoutMs}ms (${timedOutAttempts} attempt(s)): ${error.message}`);
+          }
+        }
         if (attempt === this.maxRetries) {
           throw new Error(`LLM API request failed after ${attempt + 1} attempt(s): ${error.message}`);
         }

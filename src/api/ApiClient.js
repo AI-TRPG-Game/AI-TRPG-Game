@@ -1,21 +1,27 @@
 const API_BASE = '/api';
 
 export class ApiClient {
-  async createSession(title = '新剧本') {
+  async getLlmProfiles() {
+    const res = await fetch(`${API_BASE}/llm/profiles`);
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  async createSession(title = '新剧本', llmProfileId = null) {
     const res = await fetch(`${API_BASE}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, llmProfileId }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return res.json();
   }
 
-  async createBirchStationTutorial() {
+  async createBirchStationTutorial(llmProfileId = null) {
     const res = await fetch(`${API_BASE}/sessions/tutorials/birch-station`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}',
+      body: JSON.stringify({ llmProfileId }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return res.json();

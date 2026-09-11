@@ -117,6 +117,8 @@ function makeSession(eventIds, currentTime, playerLocationId) {
     for (const [branchKey, branch] of Object.entries(event.branches || {})) {
       assert(typeof branch.playerCue === 'string' && branch.playerCue.trim(), `${event.id}/${branchKey} should define playerCue`);
       assert(/[\u3400-\u9fff]/.test(branch.playerCue), `${event.id}/${branchKey} playerCue should be Chinese`);
+      assert(Array.isArray(branch.playerOptions) && branch.playerOptions.length === 4, `${event.id}/${branchKey} should define four authored response choices`);
+      assert(branch.playerOptions[3] === 'D. 自由行动' || branch.playerOptions[3].startsWith('D. 最终决定：'), `${event.id}/${branchKey} should retain the free-action or finale D choice`);
     }
   }
 }
@@ -131,12 +133,26 @@ function makeSession(eventIds, currentTime, playerLocationId) {
   assert(session.npcs.find(npc => npc.id === 'npc_003').locationId === 'loc_005', 'participating antagonist should move to the staged scene');
 }
 
-// Crossing a time threshold makes a modern event eligible; it does not narrate it after the fact.
+// Crossing a time threshold stages a cue for the same response, without
+// resolving consequences before the player can answer it.
 {
-  const session = makeSession('records_0240', '02:30', 'loc_001');
+  const session = makeSession('blackout_0110', '01:05', 'loc_005');
   const result = service.applyNarrativeRuling(session, { time_cost_minutes: 10 });
-  assert(result.newlyEligibleEvents[0]?.id === 'records_0240', 'crossed event should become eligible');
+  assert(result.currentTime === '01:15' && result.newlyEligibleEvents[0]?.id === 'blackout_0110', 'crossed event should become eligible at the new time');
   assert(result.firedEvents.length === 0 && !session.scheduledEvents[0].fired, 'crossed event should wait for location-aware preparation');
+  const scene = service.stageBoundaryEvent(session, result.newlyEligibleEvents.map(event => event.id));
+  assert(scene?.eventId === 'blackout_0110' && scene.announcedAtBoundary, 'crossed event should be marked for immediate boundary presentation');
+  assert(scene.branchKey === 'remote' && scene.playerCue.includes('全站灯光骤然熄灭'), 'post-action location should select the perceptible off-screen cue');
+  assert(scene.playerOptions.length === 4 && !session.scheduledEvents[0].fired, 'boundary choices should be authored while event consequences remain pending');
+}
+
+// Active danger defers newly crossed events instead of interrupting combat.
+{
+  const session = makeSession('blackout_0110', '01:05', 'loc_001');
+  session.combat = { active: true };
+  const result = service.applyNarrativeRuling(session, { time_cost_minutes: 10 });
+  assert(!service.stageBoundaryEvent(session, result.newlyEligibleEvents.map(event => event.id)), 'active combat should defer boundary staging');
+  assert(session.scheduledEvents[0].status === 'eligible', 'combat-deferred event should remain eligible for a later turn');
 }
 
 // Only one foreground interruption is selected; the rest remain eligible.

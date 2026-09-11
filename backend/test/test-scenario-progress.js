@@ -59,4 +59,27 @@ assert(service.getSanState(30).id === 'unstable', 'SAN 30 should be unstable');
 assert(service.getSanState(15).id === 'critical', 'SAN 15 should be critical, not madness');
 assert(service.getSuspicionState(6).id === 'obstructed', 'suspicion 6 should obstruct the investigator');
 
+const custodySession = {
+  evidence: [],
+  playerLocationId: 'loc_001',
+  scenarioRules: {
+    clueCatalog: {
+      evidence_001: {
+        category: 'murder', source: '包厢门锁', reliability: 'high', description: '锁芯刮痕',
+        locationId: 'loc_001', keywords: ['门锁', '刮痕'], truths: ['murder'],
+        preservationHint: '拍照并拓印刮痕。',
+      },
+    },
+  },
+};
+let inferred = service.inferEvidenceChanges(custodySession, '我仔细检查门锁上的刮痕');
+assert(inferred[0]?.id === 'evidence_001' && inferred[0].secured === false, 'observation should discover a clue without preserving it');
+service.applyEvidenceChanges(custodySession, inferred);
+inferred = service.inferEvidenceChanges(custodySession, '我再次查看门锁上的刮痕');
+assert(inferred.length === 0, 'merely revisiting a discovered clue should not secure or re-award it');
+inferred = service.inferEvidenceChanges(custodySession, '我给门锁刮痕拍照并用纸笔拓印');
+assert(inferred[0]?.secured === true && service.canSecureEvidence(custodySession, 'evidence_001', '我给门锁刮痕拍照并用纸笔拓印'), 'an explicit preservation method should upgrade discovered evidence');
+service.applyEvidenceChanges(custodySession, inferred);
+assert(custodySession.evidence[0].secured, 'secured custody should persist monotonically');
+
 console.log(`${passed} passed`);

@@ -89,6 +89,37 @@ export class ScheduleService {
   }
 
   /**
+   * Stage one event immediately after a turn crosses its authored time. The
+   * cue is rendered onto the completed response, while consequences remain
+   * pending until the player's next action is narrated and acknowledged.
+   */
+  stageBoundaryEvent(session, eventIds = []) {
+    if (!session.scenarioClock || session.activeScene || session.combat?.active
+      || session.scenarioClock.mode === 'finale' || eventIds.length === 0) return null;
+    const allowed = new Set(eventIds);
+    const eligible = (session.scheduledEvents || [])
+      .filter(event => event.status === 'eligible' && allowed.has(event.id))
+      .sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0)
+        || (toMinutes(a.at) ?? Infinity) - (toMinutes(b.at) ?? Infinity));
+
+    for (const event of eligible) {
+      const decision = this._decidePlacement(session, event, session.playerLocationId);
+      if (decision.kind === 'defer' || decision.kind === 'offscreen') continue;
+      event.status = 'queued';
+      session.activeScene = this._buildForegroundScene(
+        event,
+        decision.branchKey,
+        decision.locationId,
+        null,
+        decision.resolutionLocationId
+      );
+      session.activeScene.announcedAtBoundary = true;
+      return session.activeScene;
+    }
+    return null;
+  }
+
+  /**
    * Commit the event selected by prepareTurn after a complete narrated action.
    * This intentionally happens after dice resolution, so canceling a pending
    * check does not silently resolve the scene.
@@ -226,11 +257,23 @@ export class ScheduleService {
       userText || ''
     );
     const requestedEvidenceChanges = [...inferredEvidenceChanges, ...(parsed.evidence_changes || [])];
-    const deduplicatedEvidenceChanges = [...new Map(
-      requestedEvidenceChanges
-        .filter(change => change && typeof change === 'object' && change.id)
-        .map(change => [change.id, change])
-    ).values()];
+    const mergedEvidenceChanges = new Map();
+    for (const change of requestedEvidenceChanges) {
+      if (!change || typeof change !== 'object' || !change.id) continue;
+      const previous = mergedEvidenceChanges.get(change.id) || {};
+      const alreadySecured = session.evidence?.find(item => item.id === change.id)?.secured === true;
+      const explicitlySecured = !session.scenarioRules?.clueCatalog
+        ? change.secured === true
+        : scenarioProgressService.canSecureEvidence(session, change.id, userText);
+      mergedEvidenceChanges.set(change.id, {
+        ...previous,
+        ...change,
+        // A model cannot promote evidence merely because it mentioned the clue.
+        // Existing custody is monotonic; new custody requires an explicit player action.
+        secured: alreadySecured || explicitlySecured,
+      });
+    }
+    const deduplicatedEvidenceChanges = [...mergedEvidenceChanges.values()];
     const evidenceChanges = scenarioProgressService.applyEvidenceChanges(session, deduplicatedEvidenceChanges);
     const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
     return {
@@ -302,6 +345,8 @@ export class ScheduleService {
       outcome: event.outcome,
       instruction: event.aftermathInstruction,
       playerCue: event.aftermathPlayerCue || '你抵达现场后，发现这里留下了无法忽视的变化与线索。',
+      playerOptions: clone(event.aftermathPlayerOptions || this._defaultPlayerOptions()),
+      announcedAtBoundary: false,
       revealsLocations: clone(event.pendingRevealLocations || []),
       preparedAt: new Date().toISOString(),
     };
@@ -366,8 +411,19 @@ export class ScheduleService {
       intendedLocationId,
       instruction: branch.instruction || event.text || '把这一事件自然地编入当前场景。',
       playerCue: branch.playerCue || '周围的局势突然发生变化，迫使你立刻作出回应。',
+      playerOptions: clone(branch.playerOptions || this._defaultPlayerOptions()),
+      announcedAtBoundary: false,
       preparedAt: new Date().toISOString(),
     };
+  }
+
+  _defaultPlayerOptions() {
+    return [
+      'A. 立即观察这场变化的来源',
+      'B. 询问或提醒身边的人',
+      'C. 先保护自己与重要证据',
+      'D. 自由行动',
+    ];
   }
 
   _resolveEvent(session, event, branchKey, { visible, locationId } = {}) {

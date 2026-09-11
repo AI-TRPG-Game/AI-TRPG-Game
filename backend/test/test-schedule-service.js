@@ -65,4 +65,23 @@ assert(session.playerLocationId === 'loc_003', 'only discovered location IDs sho
 service.applyStateRuling(session, { current_location_id: 'loc_hidden' });
 assert(session.playerLocationId === 'loc_003', 'undiscovered location IDs must not move the player');
 
+const custodySession = {
+  scenarioId: 'authored-custody', suspicion: 0, combat: null,
+  playerLocationId: 'loc_001', locations: [{ id: 'loc_001', name: '包厢' }],
+  evidence: [{ id: 'evidence_001', source: '包厢门锁', discovered: true, secured: false }],
+  scenarioRules: {
+    clueCatalog: {
+      evidence_001: { category: 'murder', source: '包厢门锁', locationId: 'loc_001', keywords: ['门锁', '刮痕'] },
+    },
+  },
+};
+service.applyStateRuling(custodySession, {
+  evidence_changes: [{ id: 'evidence_001', secured: true }],
+}, { userText: '我再次查看门锁刮痕' });
+assert(!custodySession.evidence[0].secured, 'model output alone must not secure evidence after passive observation');
+service.applyStateRuling(custodySession, {
+  evidence_changes: [{ id: 'evidence_001', secured: true }],
+}, { userText: '我给门锁刮痕拍照并拓印' });
+assert(custodySession.evidence[0].secured, 'explicit preservation action should allow the evidence upgrade');
+
 console.log(`${passed} passed`);

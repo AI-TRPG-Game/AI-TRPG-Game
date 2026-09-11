@@ -2,9 +2,12 @@ import { apiClient } from '../api/ApiClient.js';
 import { sessionStore } from '../persistence/SessionStore.js';
 import {
   getNpcCondition,
+  getGamePhaseLabel,
+  getGameSubStateLabel,
   getSanLabel,
   getScenarioPhaseLabel,
   getSuspicionDisplay,
+  sanitizePlayerPresentation,
 } from './ScenarioPresentation.mjs';
 
 function escapeHtml(s) {
@@ -158,6 +161,11 @@ export class GameUIController {
     this.sessionToggleButton = document.getElementById('btn-session-toggle');
     this.newSessionButton = document.getElementById('btn-new-session');
     this.tutorialSessionButton = document.getElementById('btn-tutorial-session');
+    this.modelProfileSelect = document.getElementById('model-profile-select');
+    this.modelProfileHelp = document.getElementById('model-profile-help');
+    this.llmProfiles = [];
+    this.defaultLlmProfileId = null;
+    this.selectedLlmProfileId = null;
     this.sessionListPanel = null;
 
     this.godseyePanel = document.getElementById('godseye-panel');
@@ -198,6 +206,7 @@ export class GameUIController {
   // ── 初始化 ──
   async _init() {
     try {
+      await this._loadLlmProfiles();
       const hash = window.location.hash.slice(1);
       const storedId = hash || sessionStore.getCurrentSessionId();
       const storedSession = storedId ? await sessionStore.getSession(storedId) : null;
@@ -247,6 +256,7 @@ export class GameUIController {
       this._autoGenKeyChar()
     );
     this.tutorialSessionButton.addEventListener('click', () => this._createBirchStationTutorial());
+    this.modelProfileSelect?.addEventListener('change', () => this._changeModelProfile());
 
     document.getElementById('btn-godseye').addEventListener('click', () =>
       this._toggleGodseye()
@@ -333,14 +343,14 @@ export class GameUIController {
   }
 
   async _createNewSession() {
-    const { session } = await apiClient.createSession();
+    const { session } = await apiClient.createSession('新剧本', this.selectedLlmProfileId);
     const worldResult = await apiClient.enterWorldSetting(session);
     await this._loadSession(worldResult.session);
   }
 
   async _createBirchStationTutorial() {
     try {
-      const { session } = await apiClient.createBirchStationTutorial();
+      const { session } = await apiClient.createBirchStationTutorial(this.selectedLlmProfileId);
       await this._loadSession(session);
     } catch (err) {
       this._appendMessage(`无法开始新手试炼: ${err.message}`, 'error');
@@ -352,6 +362,8 @@ export class GameUIController {
     // 如果 IndexedDB 中不存在（新建会话场景），先存入再读取
     this.session = await sessionStore.getSession(session.id)
       || await sessionStore.saveSession(session);
+    this._syncModelProfileForSession(this.session);
+    sanitizePlayerPresentation(this.session);
     localStorage.setItem('ai-trpg-current-session-id', session.id);
     window.location.hash = this.sessionId;
     this.messagesEl.innerHTML = '';
@@ -368,6 +380,82 @@ export class GameUIController {
     if (!this.session) return;
     this.session = await sessionStore.saveSession(this.session);
     await this._renderSessionList();
+  }
+
+  async _loadLlmProfiles() {
+    if (!this.modelProfileSelect) return;
+    try {
+      const result = await apiClient.getLlmProfiles();
+      this.llmProfiles = Array.isArray(result.profiles) ? result.profiles : [];
+      this.defaultLlmProfileId = result.defaultProfileId || this.llmProfiles[0]?.id || null;
+      const configuredProfiles = this.llmProfiles.filter(profile => profile.configured);
+      const selectableProfiles = configuredProfiles.length > 0 ? configuredProfiles : this.llmProfiles;
+
+      this.modelProfileSelect.innerHTML = '';
+      for (const profile of this.llmProfiles) {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = profile.configured ? profile.label : `${profile.label}（需要配置密钥）`;
+        option.title = profile.description || '';
+        option.disabled = !profile.configured;
+        this.modelProfileSelect.appendChild(option);
+      }
+
+      const remembered = localStorage.getItem('ai-trpg-llm-profile');
+      const initial = selectableProfiles.some(profile => profile.id === remembered)
+        ? remembered
+        : (selectableProfiles.some(profile => profile.id === this.defaultLlmProfileId)
+          ? this.defaultLlmProfileId
+          : selectableProfiles[0]?.id || null);
+      this.selectedLlmProfileId = initial;
+      if (initial) this.modelProfileSelect.value = initial;
+      this._renderModelProfileHelp();
+    } catch (error) {
+      this.modelProfileSelect.innerHTML = '<option value="">服务器默认模型</option>';
+      this.modelProfileSelect.disabled = true;
+      this.modelProfileHelp.textContent = `无法读取模型列表：${error.message}`;
+    }
+  }
+
+  _syncModelProfileForSession(session) {
+    if (!this.modelProfileSelect) return;
+    const available = this.llmProfiles.some(
+      profile => profile.id === session.llmProfileId && profile.configured
+    );
+    const nextProfileId = available
+      ? session.llmProfileId
+      : (this.selectedLlmProfileId || this.defaultLlmProfileId);
+    if (nextProfileId) {
+      session.llmProfileId = nextProfileId;
+      this.selectedLlmProfileId = nextProfileId;
+      this.modelProfileSelect.value = nextProfileId;
+      localStorage.setItem('ai-trpg-llm-profile', nextProfileId);
+    }
+    this._renderModelProfileHelp();
+  }
+
+  _renderModelProfileHelp() {
+    if (!this.modelProfileHelp) return;
+    const profile = this.llmProfiles.find(item => item.id === this.selectedLlmProfileId);
+    this.modelProfileHelp.textContent = profile?.description
+      || '叙事、总结和结局会自动采用适合该模型的参数。';
+  }
+
+  async _changeModelProfile() {
+    const nextProfileId = this.modelProfileSelect?.value || null;
+    if (!nextProfileId || this.inputLocked) {
+      if (this.selectedLlmProfileId) this.modelProfileSelect.value = this.selectedLlmProfileId;
+      return;
+    }
+    this.selectedLlmProfileId = nextProfileId;
+    localStorage.setItem('ai-trpg-llm-profile', nextProfileId);
+    this._renderModelProfileHelp();
+    if (!this.session) return;
+
+    this.session.llmProfileId = nextProfileId;
+    await this._persistSession();
+    const profile = this.llmProfiles.find(item => item.id === nextProfileId);
+    this._appendMessage(`本会话将在下一次请求中使用${profile?.label || '所选模型'}。`, 'system');
   }
 
   async _renderSessionList() {
@@ -425,9 +513,10 @@ export class GameUIController {
       const openBtn = document.createElement('button');
       openBtn.type = 'button';
       openBtn.className = 'session-main';
+      const modelName = this.llmProfiles.find(profile => profile.id === session.llmProfileId)?.model;
       openBtn.innerHTML = `
         <span class="session-title">${escapeHtml(session.title || '新剧本')}</span>
-        <span class="session-meta">${escapeHtml(session.phase)} · ${escapeHtml(session.subState)}</span>
+        <span class="session-meta">${escapeHtml(getGamePhaseLabel(session.phase))} · ${escapeHtml(getGameSubStateLabel(session.subState))}${modelName ? ` · ${escapeHtml(modelName)}` : ''}</span>
       `;
       openBtn.addEventListener('click', () => this._loadSession(session));
 
@@ -1027,6 +1116,7 @@ export class GameUIController {
     const blocked = this._isInputBlocked();
     this.promptInput.disabled = blocked;
     this.sendButton.disabled = blocked;
+    if (this.modelProfileSelect) this.modelProfileSelect.disabled = blocked;
   }
 
   _areOptionButtonsLocked() {
@@ -1059,7 +1149,7 @@ export class GameUIController {
 
     if (displayLog.length === 0) {
       this._appendMessage(
-        `【会话已恢复】\n阶段: ${this.session.phase}\n点击发送，继续冒险。`,
+        `【会话已恢复】\n阶段：${getGamePhaseLabel(this.session.phase)}\n点击发送，继续冒险。`,
         'system'
       );
     }
@@ -1081,7 +1171,7 @@ export class GameUIController {
   _updateUI() {
     if (!this.session) return;
 
-    this.phaseLabel.textContent = `阶段: ${this.session.phase} | 状态: ${this.session.subState}`;
+    this.phaseLabel.textContent = `阶段：${getGamePhaseLabel(this.session.phase)} | 状态：${getGameSubStateLabel(this.session.subState)}`;
     if (this.session.scenarioClock) {
       const clock = this.session.scenarioClock;
       const evidenceList = this.session.evidence || [];
@@ -1134,7 +1224,7 @@ export class GameUIController {
           const isCurrent = l.id === this.session.playerLocationId;
           const marker = isCurrent ? '📍' : '📌';
           const currentLabel = isCurrent ? '<small style="opacity:0.75"> 你在此</small>' : '';
-          return `<div class="sidebar-item-row">${marker} <span class="sidebar-clickable" data-detail="location" data-location-id="${escapeHtml(l.id ?? '')}" title="${escapeHtml(l.id ?? '')}">${escapeHtml(l.name)}${currentLabel}<small class="entity-id-badge">${escapeHtml(l.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`;
+          return `<div class="sidebar-item-row">${marker} <span class="sidebar-clickable" data-detail="location" data-location-id="${escapeHtml(l.id ?? '')}">${escapeHtml(l.name)}${currentLabel}</span><button class="sidebar-item-action sbb-edit" data-edit-location="${i}">✎</button></div>`;
         }
       )
       .join('') + '<button class="sidebar-add-btn" data-add="location">+ 新增地点</button>';
@@ -1143,15 +1233,20 @@ export class GameUIController {
     if (this.evidencePanel) {
       const evidence = this.session.evidence || [];
       const catalog = this.session.scenarioRules?.clueCatalog || {};
-      this.evidencePanel.innerHTML = evidence.length
-        ? evidence.map(item => {
+      const discoveredEvidence = evidence.filter(item => item.discovered !== false);
+      const evidenceHelp = '<div class="sidebar-evidence-help" title="已发现：你知道线索存在，但它还不能可靠带走或复核。已保全：已经拍照、录音、抄录、取样、封存或带走，可以用于最终真相判定。">“已发现”提示调查方向；“已保全”才可用于证明。</div>';
+      this.evidencePanel.innerHTML = evidenceHelp + (discoveredEvidence.length
+        ? discoveredEvidence.map(item => {
           const definition = catalog[item.id] || {};
-          const status = item.secured ? '已保全' : '已发现，待保全';
-          const source = item.source || definition.source || item.id;
+          const status = item.secured ? '已保全（可用于证明）' : '已发现（不计入证明）';
+          const source = item.source || definition.source || '未命名线索';
           const description = item.description || definition.description || '';
-          return `<div class="sidebar-evidence-item"><span class="sidebar-evidence-status">${item.secured ? '✓' : '•'}</span><span><strong>${escapeHtml(source)}</strong><small>${escapeHtml(status)}${description ? ` · ${escapeHtml(description)}` : ''}</small></span></div>`;
+          const nextStep = !item.secured && definition.preservationHint
+            ? `<small>下一步：${escapeHtml(definition.preservationHint)}</small>`
+            : '';
+          return `<div class="sidebar-evidence-item"><span class="sidebar-evidence-status">${item.secured ? '✓' : '•'}</span><span><strong>${escapeHtml(source)}</strong><small>${escapeHtml(status)}${description ? ` · ${escapeHtml(description)}` : ''}</small>${nextStep}</span></div>`;
         }).join('')
-        : '<div class="sidebar-clickable empty" style="font-size:12px;">尚未发现证据</div>';
+        : '<div class="sidebar-clickable empty" style="font-size:12px;">尚未发现证据</div>');
     }
 
     // NPC —— 名称 + 编辑（按 id 引用）。npc_000 是玩家的内部实体，单独显示在“玩家状态”。
@@ -1170,7 +1265,7 @@ export class GameUIController {
           const tag = n.id === 'npc_000' ? '（主角）'
             : (npcNum >= 1 && npcNum <= keyCharCount) ? '（已邀请）'
             : '';
-          return `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-id="${escapeHtml(n.id ?? '')}" title="${escapeHtml(n.id ?? '')}">${escapeHtml(n.name)}${tag ? `<small style="opacity:0.6"> ${tag}</small>` : ''}<small class="entity-id-badge">${escapeHtml(n.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`;
+          return `<div class="sidebar-item-row">👤 <span class="sidebar-clickable" data-detail="npc" data-npc-id="${escapeHtml(n.id ?? '')}">${escapeHtml(n.name)}${tag ? `<small style="opacity:0.6"> ${tag}</small>` : ''}</span><button class="sidebar-item-action sbb-edit" data-edit-npc="${i}">✎</button></div>`;
       }
       )
       .join('') + '<button class="sidebar-add-btn" data-add="npc">+ 新增 NPC</button>';
@@ -1179,7 +1274,7 @@ export class GameUIController {
     this.inventoryPanel.innerHTML = (this.session.inventory || [])
       .map(
         (i, idx) =>
-          `<div class="sidebar-item-row">📦 <span class="sidebar-clickable" data-detail="inventory" data-item-id="${escapeHtml(i.id ?? '')}" title="${escapeHtml(i.id ?? '')}">${escapeHtml(i.name)}<small class="entity-id-badge">${escapeHtml(i.id ?? '')}</small></span><button class="sidebar-item-action sbb-edit" data-edit-item="${idx}">✎</button></div>`
+          `<div class="sidebar-item-row">📦 <span class="sidebar-clickable" data-detail="inventory" data-item-id="${escapeHtml(i.id ?? '')}">${escapeHtml(i.name)}</span><button class="sidebar-item-action sbb-edit" data-edit-item="${idx}">✎</button></div>`
       )
       .join('') + '<button class="sidebar-add-btn" data-add="item">+ 新增物品</button>';
 

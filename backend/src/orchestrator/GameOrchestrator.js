@@ -33,6 +33,12 @@ import { scheduleService } from '../services/ScheduleService.js';
 import { scenarioProgressService } from '../services/ScenarioProgressService.js';
 import { optionResolver } from '../services/OptionResolver.js';
 import { BIRCH_STATION_TUTORIAL } from '../scenarios/birchStation.js';
+import { playerFacingTextSanitizer } from '../services/PlayerFacingTextSanitizer.js';
+import {
+  FINALE_OPTION_BUFFER,
+  detectFinaleOptionChoice,
+  repairFinaleState,
+} from '../domain/FinaleState.js';
 
 function escapeHtml(s) {
   // 仅转义会破坏 HTML 结构的字符（& < >），不转义 "（innerHTML 会解码回来）
@@ -42,23 +48,15 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;');
 }
 
-const FINALE_OPTIONS = [
-  'A. 最终决定：公开真相',
-  'B. 最终决定：保全并带走证据',
-  'C. 最终决定：销毁或压下真相',
-  'D. 最终决定：撤离白桦站',
-];
-
-const FINALE_OPTION_BUFFER = FINALE_OPTIONS.join('\n');
-
 export class GameOrchestrator {
   /**
    * v2.0 strict 模式改造：移除 streamEmitter 依赖，所有 LLM 调用走非流式 generate。
    * debug 信息改为返回值中的 debugLogs 数组，前端一次性渲染。
    */
-  constructor({ repository, llmProvider }) {
+  constructor({ repository, llmProvider, llmProfileId = null }) {
     this.repository = repository;
     this.llmProvider = llmProvider;
+    this.llmProfileId = llmProfileId;
     this.historySummarizer = new HistorySummarizer({
       llmProvider,
       repository,
@@ -88,12 +86,16 @@ export class GameOrchestrator {
   }
 
   createSession(title) {
-    return this.repository.create(title);
+    const session = this.repository.create(title);
+    session.llmProfileId = this.llmProfileId;
+    this.repository.save(session);
+    return session;
   }
 
   createBirchStationTutorial() {
     const definition = BIRCH_STATION_TUTORIAL;
     const session = this.repository.create(definition.title);
+    session.llmProfileId = this.llmProfileId;
     session.phase = Phase.STORY_PLAY;
     session.subState = SubState.AWAITING_INPUT;
     session.openingDone = true;
@@ -568,6 +570,11 @@ export class GameOrchestrator {
 
   async handleMessage(sessionId, userText, { onDebug } = {}) {
     const session = this.getSession(sessionId);
+    // Defensive repair for callers that provide a partially migrated session.
+    // GameSession normally performs this normalization in its constructor, but
+    // keeping the routing boundary safe prevents future persistence adapters
+    // from reintroducing the absorbing "finale clock + no finale stage" state.
+    repairFinaleState(session);
     const check = phaseManager.canPerformAction(
       session,
       GameAction.SEND_MESSAGE
@@ -682,7 +689,8 @@ export class GameOrchestrator {
     const turnPreparation = flowType === FlowType.NARRATION_I
       ? scheduleService.prepareTurn(session, { userText })
       : null;
-    const assembled = inputAssembler.assemble(flowType, session, { userText });
+    const narrationProfile = this._selectNarrationProfile(session, flowType, userText);
+    const assembled = inputAssembler.assemble(flowType, session, { userText, narrationProfile });
     const debugLogs = [];
 
     if (turnPreparation?.activeScene) {
@@ -748,6 +756,14 @@ export class GameOrchestrator {
     if (flowType === FlowType.NARRATION_I && result.branch === 'NARRATIVE') {
       const scenarioResult = this._applyScenarioRuling(session, result.parsed);
       Object.assign(result, scenarioResult);
+      if (scenarioResult.boundaryScene) {
+        this._applyBoundaryScenePresentation(session, result, flowType, scenarioResult.boundaryScene);
+        this._pushDebug(debugLogs, onDebug, {
+          type: 'event_boundary_staged',
+          flowType,
+          content: `[事件调度] 已在跨越时间点的同一响应中展示 ${scenarioResult.boundaryScene.eventId}/${scenarioResult.boundaryScene.outcome}，等待玩家回应。`,
+        });
+      }
       this._discardOrdinaryOptionsForFinale(session, result, flowType);
       if (scenarioResult.eventResolution) {
         this._pushDebug(debugLogs, onDebug, {
@@ -767,15 +783,17 @@ export class GameOrchestrator {
       .reverse()
       .find(entry => entry?.role === ChatRole.PLAYER)?.content || '');
     const stateResult = scheduleService.applyStateRuling(session, parsed, { userText: lastPlayerAction });
+    const handledForegroundEvent = Boolean(session.activeScene);
     const eventResult = scheduleService.commitActiveScene(session);
     const clockResult = advanceClock
       ? scheduleService.applyNarrativeRuling(session, parsed)
       : { advanced: false, deadlineReached: false, firedEvents: [], revealedLocations: [] };
     const scenarioMessages = [];
     const appendSystemMessage = (message) => {
-      scenarioMessages.push(message);
-      this._pushDisplay(session, 'system', message);
-      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: message, timestamp: new Date().toISOString() });
+      const safeMessage = playerFacingTextSanitizer.sanitizeText(session, message);
+      scenarioMessages.push(safeMessage);
+      this._pushDisplay(session, 'system', safeMessage);
+      session.chatRecord.push({ role: ChatRole.SYSTEM, type: ChatEntryType.SYSTEM, content: safeMessage, timestamp: new Date().toISOString() });
     };
 
     if (clockResult.advanced) {
@@ -792,8 +810,8 @@ export class GameOrchestrator {
     for (const evidence of stateResult.evidenceChanges || []) {
       const evidenceLabel = evidence.source || evidence.id;
       appendSystemMessage(evidence.secured
-        ? `【证据已保全】${evidenceLabel}`
-        : `【发现线索】${evidenceLabel}（尚未保全）`);
+        ? `【证据已保全】${evidenceLabel}——已形成可带走、复核的记录，可用于最终真相判定。`
+        : `【发现线索】${evidenceLabel}——已记录到调查笔记，仍需采取措施保全。`);
     }
     if (stateResult.locationChanged) {
       const locationMessage = `【移动】你现在位于：${stateResult.locationChanged.name}。`;
@@ -819,6 +837,10 @@ export class GameOrchestrator {
       appendSystemMessage(finaleMessage);
       finaleDecisionActivated = true;
     }
+    const newlyEligibleIds = (clockResult.newlyEligibleEvents || []).map(event => event.id);
+    const boundaryScene = !handledForegroundEvent && !clockResult.deadlineReached && !session.combat?.active
+      ? scheduleService.stageBoundaryEvent(session, newlyEligibleIds)
+      : null;
     const recommendation = parsed?.ending_recommendation;
     const truthProgress = scenarioProgressService.evaluateTruth(session);
     const playerChoiceReady = scenarioProgressService.canAcceptRecommendedEnding(session);
@@ -832,6 +854,7 @@ export class GameOrchestrator {
       scenarioMessages,
       truthProgress,
       finaleDecisionActivated,
+      boundaryScene,
       eventResolution: eventResult.event
         ? { id: eventResult.event.id, outcome: eventResult.event.outcome, aftermath: Boolean(eventResult.aftermath) }
         : null,
@@ -852,6 +875,7 @@ export class GameOrchestrator {
     // 保存最近一次 doCall 的诊断信息（finish_reason 等），供 tryRefine 在解析失败时使用
     // 必须在 doCall 定义之前声明，否则 doCall 内部赋值会触发 TDZ（暂时性死区）
     let lastDiagnostic = null;
+    let lastSoftFallback = null;
 
     const doCall = async (assembledPrompt) => {
       attemptNum++;
@@ -882,9 +906,8 @@ export class GameOrchestrator {
         }).join('\n'),
       });
 
-      // 重试沿用本次 assembled 的模型/思考配置；Flash 默认由 provider 关闭思考，
-      // pro 或显式 LLM_THINKING_TYPE=enabled 则保留 reasoning_effort='high'。
-      // 思考模式不能传 tool_choice，非思考模式由 provider 使用 required 强制 function。
+      // 重试沿用当前模型配置；provider 会按能力过滤 thinking、
+      // reasoning_effort 与 tool_choice，避免把厂商专用字段发给错误的模型。
       // 若思考被 max_tokens 截断（finish_reason=length），直接抛错让用户感知，由其调大 max_tokens
       const llmStartedAt = Date.now();
       const result = await this.llmProvider.generate(assembledPrompt);
@@ -894,11 +917,15 @@ export class GameOrchestrator {
 
       const effectiveModel = assembledPrompt.modelOverride || this.llmProvider.model || 'default';
       const thinkingUsed = result.thinkingEnabled ?? Boolean(result.reasoningContent);
+      const requestPolicy = result._diagnostic?.requestPolicy;
+      const policySummary = requestPolicy
+        ? ` · max_tokens=${requestPolicy.maxTokens} · timeout=${requestPolicy.timeoutMs}ms`
+        : '';
       this._pushDebug(debugLogs, onDebug, {
         type: 'system',
         flowType,
         attempt: attemptNum,
-        content: `[LLM] ${effectiveModel} · ${latencyMs}ms · thinking=${thinkingUsed ? 'enabled' : 'disabled'} · tool_calls=${result.hasToolCall ? 'yes' : 'no'}`,
+        content: `[LLM] ${this.llmProvider.label || effectiveModel} · ${latencyMs}ms · thinking=${thinkingUsed ? 'enabled' : 'disabled'} · tool_calls=${result.hasToolCall ? 'yes' : 'no'}${policySummary}`,
       });
 
       // KV Cache 监控：记录每次调用的 token 使用与缓存命中情况
@@ -955,10 +982,16 @@ export class GameOrchestrator {
     const tryRefine = async (rawText) => {
       const parsed = jsonOutputParser.parse(rawText);
       if (parsed && parsed[requiredField] !== undefined) {
-        const semantic = this._validateFlowSemantics(session, flowType, parsed);
+        const safeParsed = playerFacingTextSanitizer.sanitizeParsed(session, parsed);
+        const semantic = this._validateFlowSemantics(
+          session,
+          flowType,
+          safeParsed,
+          assembled.narrationProfile
+        );
         if (semantic.ok) {
-          const refined = textRefiner.refine(flowType, parsed);
-          return { ok: true, raw: rawText, refinedHtml: refined.html };
+          const refined = textRefiner.refine(flowType, safeParsed);
+          return { ok: true, raw: JSON.stringify(safeParsed), refinedHtml: refined.html };
         }
         this._pushDebug(debugLogs, onDebug, {
           type: semantic.type || 'semantic_validation_failed',
@@ -966,7 +999,14 @@ export class GameOrchestrator {
           attempt: attemptNum,
           content: semantic.message,
         });
-        return { ok: false, reason: semantic.message };
+        if (semantic.soft) {
+          lastSoftFallback = {
+            raw: JSON.stringify(safeParsed),
+            refinedHtml: textRefiner.refine(flowType, safeParsed).html,
+            reason: semantic.message,
+          };
+        }
+        return { ok: false, reason: semantic.message, soft: Boolean(semantic.soft) };
       }
       // 记录详细诊断信息：raw 内容 + 字段名 + 字段值类型 + 尾部内容 + finish_reason
       // 用于排查"LLM 看起来按格式输出但系统判错"的场景
@@ -1058,12 +1098,24 @@ export class GameOrchestrator {
     result = await tryRefine(raw);
     if (result.ok) return { raw: result.raw, refinedHtml: result.refinedHtml, reasoningContent: lastReasoningContent };
 
-    // 第二次重试：继续沿用当前模型的思考配置，并追加更强的 reminder。
+    // 篇幅目标属于软保证。最多重写一次，避免较慢的模型仅因字数偏差
+    // 连续完成三次昂贵生成；活动事件与结局完整性仍使用完整三次预算。
+    if (result.soft && lastSoftFallback) {
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'narration_length_fallback',
+        flowType,
+        attempt: attemptNum,
+        content: `模型第二次仍未达到目标篇幅，已接受结构与事件语义安全的叙事。${lastSoftFallback.reason}`,
+      });
+      return { ...lastSoftFallback, reasoningContent: lastReasoningContent };
+    }
+
+    // 第二次重试：继续沿用当前模型配置，并追加更强的 reminder。
     this._pushDebug(debugLogs, onDebug, {
       type: session.activeScene ? 'event_retry' : 'retry_clear',
       flowType,
       attempt: attemptNum,
-      content: `第二次重试：继续使用思考模式 high + 强化 reminder（不再切换到非思考模式）`,
+      content: '第二次重试：保留当前模型参数并强化结构化输出提醒。',
     });
 
     const strongerReminder = `\n\n【重要提醒】上一次响应仍未通过系统校验：${result.reason || `缺少“${requiredField}”`}。请务必调用指定函数返回合法JSON，并逐项满足活动事件或结局的语义要求；不要输出函数调用之外的文本。`;
@@ -1086,6 +1138,16 @@ export class GameOrchestrator {
 
     result = await tryRefine(raw);
     if (result.ok) return { raw: result.raw, refinedHtml: result.refinedHtml, reasoningContent: lastReasoningContent };
+
+    if (lastSoftFallback) {
+      this._pushDebug(debugLogs, onDebug, {
+        type: 'narration_length_fallback',
+        flowType,
+        attempt: attemptNum,
+        content: `模型三次均未达到目标篇幅，已接受最后一份结构与事件语义安全的叙事。${lastSoftFallback.reason}`,
+      });
+      return { ...lastSoftFallback, reasoningContent: lastReasoningContent };
+    }
 
     const eventFallback = this._buildActiveEventFallback(session, flowType, raw);
     if (eventFallback) {
@@ -1110,11 +1172,12 @@ export class GameOrchestrator {
     }
 
     // 第三次仍失败：raw 兜底（必须包裹 <div class="kp-block">，否则前端 _restoreUI 的 startsWith('<div') 判断会失败）
-    this._applyRawFallback(session, flowType, raw, requiredField, debugLogs, onDebug);
-    return { raw, refinedHtml: `<div class="kp-block">${escapeHtml(raw)}</div>`, reasoningContent: lastReasoningContent };
+    const safeRaw = playerFacingTextSanitizer.sanitizeText(session, raw);
+    this._applyRawFallback(session, flowType, safeRaw, requiredField, debugLogs, onDebug);
+    return { raw, refinedHtml: `<div class="kp-block">${escapeHtml(safeRaw)}</div>`, reasoningContent: lastReasoningContent };
   }
 
-  _validateFlowSemantics(session, flowType, parsed) {
+  _validateFlowSemantics(session, flowType, parsed, narrationProfile = null) {
     if (flowType === FlowType.ENDING_GEN) {
       const requiredTexts = [ENDING_TITLE, IMMEDIATE_RESOLUTION, PLAYER_OUTCOME, TRUTH_OUTCOME, ENDING_TEXT];
       const missingText = requiredTexts.find(field => !String(parsed?.[field] || '').trim());
@@ -1149,28 +1212,47 @@ export class GameOrchestrator {
     const scene = session.activeScene;
     const acknowledgement = parsed?.[ACTIVE_EVENT_ACK];
     if (!scene) {
-      return acknowledgement === null
-        ? { ok: true }
+      const ackResult = acknowledgement === null
+        ? null
         : {
           ok: false,
           type: 'event_acknowledgement_failed',
           message: '当前没有活动事件，active_event_ack必须为null。',
         };
+      if (ackResult) return ackResult;
+    } else {
+      const consequence = String(acknowledgement?.perceived_consequence || '').trim();
+      const matches = acknowledgement
+        && acknowledgement.event_id === scene.eventId
+        && acknowledgement.outcome === scene.outcome
+        && acknowledgement.incorporated === true
+        && consequence.length > 0;
+      if (!matches) {
+        return {
+          ok: false,
+          type: 'event_acknowledgement_failed',
+          message: `活动事件未被可靠写入叙事。active_event_ack必须确认 event_id=${scene.eventId}、outcome=${scene.outcome}、incorporated=true，并填写玩家可感知后果。`,
+        };
+      }
     }
 
-    const consequence = String(acknowledgement?.perceived_consequence || '').trim();
-    const matches = acknowledgement
-      && acknowledgement.event_id === scene.eventId
-      && acknowledgement.outcome === scene.outcome
-      && acknowledgement.incorporated === true
-      && consequence.length > 0;
-    return matches
-      ? { ok: true }
-      : {
+    if (![FlowType.NARRATION_I, FlowType.NARRATION_II].includes(flowType)) return { ok: true };
+    const profile = this._effectiveNarrationProfile(session, parsed, narrationProfile);
+    const visibleLength = this._visibleNarrationLength(parsed[NARRATION]);
+    const limits = profile === 'pre-dice'
+      ? { min: 180, max: 500, target: '200-400' }
+      : profile === 'major'
+        ? { min: 650, max: 1300, target: '700-1100' }
+        : { min: 400, max: 900, target: '450-750' };
+    if (visibleLength < limits.min || visibleLength > limits.max) {
+      return {
         ok: false,
-        type: 'event_acknowledgement_failed',
-        message: `活动事件未被可靠写入叙事。active_event_ack必须确认 event_id=${scene.eventId}、outcome=${scene.outcome}、incorporated=true，并填写玩家可感知后果。`,
+        soft: true,
+        type: 'narration_length_validation_failed',
+        message: `叙事可见长度为${visibleLength}字；本轮${profile === 'major' ? '重大场景' : profile === 'pre-dice' ? '检定前铺垫' : '普通场景'}目标为${limits.target}字。请补足行动结果、环境变化、人物反应和可执行后果，且不要重复旧信息。`,
       };
+    }
+    return { ok: true };
   }
 
   _buildActiveEventFallback(session, flowType, raw) {
@@ -1210,8 +1292,9 @@ export class GameOrchestrator {
         perceived_consequence: cue,
       },
     };
-    const fallbackRaw = JSON.stringify(fallback);
-    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(flowType, fallback).html };
+    const safeFallback = playerFacingTextSanitizer.sanitizeParsed(session, fallback);
+    const fallbackRaw = JSON.stringify(safeFallback);
+    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(flowType, safeFallback).html };
   }
 
   _requiredEndingNpcs(session) {
@@ -1274,8 +1357,9 @@ export class GameOrchestrator {
         ? parsed.debrief
         : { hidden_plot: '白桦矿难、异常转运与顾言之死彼此相连。', important_events: [], evidence_used: (session.evidence || []).filter(item => item.secured).map(item => item.id), missed_leads: [], next_try: '尝试更早保全证据并取得关键证人的信任。' },
     };
-    const fallbackRaw = JSON.stringify(fallback);
-    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(FlowType.ENDING_GEN, fallback).html };
+    const safeFallback = playerFacingTextSanitizer.sanitizeParsed(session, fallback);
+    const fallbackRaw = JSON.stringify(safeFallback);
+    return { raw: fallbackRaw, refinedHtml: textRefiner.refine(FlowType.ENDING_GEN, safeFallback).html };
   }
 
   _applyRawFallback(session, flowType, raw, requiredField, debugLogs, onDebug) {
@@ -1544,10 +1628,11 @@ export class GameOrchestrator {
       await this.historySummarizer.checkAndRun(session);
     }
 
+    const narrationProfile = this._selectNarrationProfile(session, FlowType.NARRATION_II);
     const assembled = inputAssembler.assemble(
       FlowType.NARRATION_II,
       session,
-      {}
+      { narrationProfile }
     );
 
     const debugLogs = [];
@@ -1622,6 +1707,14 @@ export class GameOrchestrator {
       };
       scenarioResult = this._applyScenarioRuling(session, finalRuling);
       Object.assign(result, scenarioResult);
+      if (scenarioResult.boundaryScene) {
+        this._applyBoundaryScenePresentation(session, result, FlowType.NARRATION_II, scenarioResult.boundaryScene);
+        this._pushDebug(debugLogs, onDebug, {
+          type: 'event_boundary_staged',
+          flowType: FlowType.NARRATION_II,
+          content: `[事件调度] 已在跨越时间点的同一响应中展示 ${scenarioResult.boundaryScene.eventId}/${scenarioResult.boundaryScene.outcome}，等待玩家回应。`,
+        });
+      }
       this._discardOrdinaryOptionsForFinale(session, result, FlowType.NARRATION_II);
       if (scenarioResult.eventResolution) {
         this._pushDebug(debugLogs, onDebug, {
@@ -1675,6 +1768,59 @@ export class GameOrchestrator {
     });
   }
 
+  _selectNarrationProfile(session, flowType, userText = '') {
+    if (![FlowType.NARRATION_I, FlowType.NARRATION_II].includes(flowType)) return null;
+    const majorAction = /进入|抵达|赶到|发现|揭露|档案|证据|真相|危机|战斗|追逐|对抗|enter|arrive|discover|evidence|combat|chase/i.test(String(userText));
+    return session.activeScene || session.combat?.active || majorAction ? 'major' : 'standard';
+  }
+
+  _effectiveNarrationProfile(session, parsed, selectedProfile) {
+    if (Array.isArray(parsed?.[ACTIONS]) && parsed[ACTIONS].length > 0) return 'pre-dice';
+    const moved = parsed?.current_location_id
+      && session.playerLocationId
+      && parsed.current_location_id !== session.playerLocationId;
+    const meaningfulEvidence = Array.isArray(parsed?.evidence_changes) && parsed.evidence_changes.length > 0;
+    return selectedProfile === 'major' || moved || meaningfulEvidence || session.activeScene || session.combat?.active
+      ? 'major'
+      : 'standard';
+  }
+
+  _visibleNarrationLength(value) {
+    return String(value || '')
+      .replace(/[`*_>#\[\](){}\\|-]/g, '')
+      .replace(/\s/g, '')
+      .length;
+  }
+
+  _applyBoundaryScenePresentation(session, result, flowType, scene) {
+    if (!result?.parsed || !scene) return;
+    const previousHtml = result.refinedHtml;
+    const cue = playerFacingTextSanitizer.sanitizeText(session, scene.playerCue || '周围的局势突然发生变化。');
+    const narration = String(result.parsed[NARRATION] || '').trim();
+    result.parsed[NARRATION] = narration.includes(cue)
+      ? narration
+      : [narration, cue].filter(Boolean).join('\n\n');
+    result.parsed[ACTIONS] = null;
+    result.parsed[OPTIONS] = (scene.playerOptions || [
+      'A. 立即观察这场变化的来源',
+      'B. 询问或提醒身边的人',
+      'C. 先保护自己与重要证据',
+      'D. 自由行动',
+    ]).map(option => playerFacingTextSanitizer.sanitizeText(session, option));
+    result.raw = JSON.stringify(result.parsed);
+    result.refinedHtml = textRefiner.refine(flowType, result.parsed).html;
+    session.optionBuffer = result.parsed[OPTIONS].join('\n');
+
+    const displayEntry = [...(session.displayLog || [])].reverse()
+      .find(entry => entry.role === 'kp' && entry.content === previousHtml);
+    if (displayEntry) displayEntry.content = result.refinedHtml;
+    const chatEntry = [...(session.chatRecord || [])].reverse()
+      .find(entry => entry.role === ChatRole.KP && entry.parsed === result.parsed);
+    if (chatEntry) {
+      chatEntry.content = `${result.parsed[NARRATION]}\n\n【请选择你接下来的行动】\n${session.optionBuffer}`;
+    }
+  }
+
   _discardOrdinaryOptionsForFinale(session, result, flowType) {
     if (!result?.finaleDecisionActivated || !result.parsed) return;
     const previousHtml = result.refinedHtml;
@@ -1701,7 +1847,9 @@ export class GameOrchestrator {
   }
 
   _enterFinale(session, result = {}) {
-    if (!session.scenarioClock || session.scenarioClock.mode === 'finale') return;
+    if (!session.scenarioClock) return;
+    const wasFinale = session.scenarioClock.mode === 'finale';
+    const previousStage = session.finaleState?.stage || null;
     session.scenarioClock.mode = 'finale';
     session.scenarioClock.phase = 'finale';
     const resolvingScene = Boolean(session.combat?.active);
@@ -1713,11 +1861,15 @@ export class GameOrchestrator {
     const message = resolvingScene
       ? '【06:00 · 终局】雾港号已经鸣笛，正常调查时间结束。游戏内时钟暂停；请先解决眼前的直接危险，随后再决定真相与证据的去向。'
       : this._activateFinaleDecision(session);
-    this._recordSystemMessage(session, message);
+    const targetStage = resolvingScene ? 'resolve_scene' : 'decision';
+    const shouldAnnounce = !wasFinale || previousStage !== targetStage;
+    if (shouldAnnounce) this._recordSystemMessage(session, message);
     result.scenarioDeadlineReached = false;
-    result.finaleEntered = true;
+    result.finaleEntered = !wasFinale;
     result.finaleDecisionActivated = !resolvingScene;
-    result.scenarioMessages = [...(result.scenarioMessages || []), message];
+    if (shouldAnnounce) {
+      result.scenarioMessages = [...(result.scenarioMessages || []), message];
+    }
   }
 
   async _handleFinaleDecision(session, userText, modelUserText, onDebug) {
@@ -1728,7 +1880,12 @@ export class GameOrchestrator {
       content: modelUserText,
       timestamp: new Date().toISOString(),
     });
-    const choice = scenarioProgressService.detectFinalChoice(modelUserText);
+    // Prefer the semantic action expanded from the option text. This preserves
+    // the meaning of a stale pre-finale option the player actually saw (for
+    // example "登车离开" => withdrawal). A direct letter mapping is the fallback
+    // when the option buffer was missing and only "选项A" survives.
+    const choice = scenarioProgressService.detectFinalChoice(modelUserText)
+      || detectFinaleOptionChoice(userText);
     if (!choice) {
       const message = `【终局抉择尚未确认】请明确选择以下一项：\n${FINALE_OPTION_BUFFER}`;
       session.optionBuffer = FINALE_OPTION_BUFFER;

@@ -7,7 +7,7 @@ import { buildEntityReferenceRules } from '../domain/NarrativeSchema.js';
 // 2. 动态内容（世界观、角色状态等）放在 user message 中
 // 3. strict 模式下 schema 已强制字段结构，prompt 只描述语义，不重复 schema description
 // 4. 不教 LLM 如何转义（strict 模式服务端自动转义，prompt 提转义反而导致字面输出）
-const SYSTEM_PREFIX = `你是CoC7th规则下的KP兼文学剧本创作者。除JSON字段名、实体ID和规则枚举值外，所有面向玩家的文字必须使用简体中文。必须通过调用指定函数以JSON返回结果，不在函数调用之外输出任何文本。`;
+const SYSTEM_PREFIX = `你是CoC7th规则下的KP兼文学剧本创作者。除JSON字段名、结构化实体ID和规则枚举值外，所有面向玩家的文字必须使用简体中文。实体ID只能填写在id、current_location_id、evidence_changes、active_event_ack等结构化字段中；严禁把loc_001、evidence_001、npc_001、item_001之类的内部ID写入narration、options、实体描述或其他玩家可见文字。必须通过调用指定函数以JSON返回结果，不在函数调用之外输出任何文本。`;
 
 // ── CoC7th 数值计算规则（CHARACTER_GEN / KEY_CHARACTER_GEN 共用） ──
 // 仅保留 schema 无法表达的公式和计算规则，范围约束由 schema minimum/maximum 强制
@@ -20,7 +20,7 @@ const CHARACTER_RULES = `CoC7th数值规则：
 6. 核查：基础点数不计入职业/兴趣技能点总和限制`;
 
 // ── options 字段通用说明（STORY_OPENING / NARRATION_I / NARRATION_II 共用） ──
-const OPTIONS_RULE = `options：4个选项（前3个以"A.""B.""C."开头，最后1个固定"D. 自由行动"）`;
+const OPTIONS_RULE = `options：4个自然、沉浸式的中文行动选项（前3个以"A.""B.""C."开头，最后1个固定"D. 自由行动"）；只能使用地点、人物、物品和线索的可读名称或具体动作，绝不能显示任何内部ID`;
 
 const WORLD_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：根据用户输入生成世界观印象。为营造代入感，可尝试环境切入/普通人视角/传说歌谣/对话切入/电影蒙太奇等手法。
@@ -67,7 +67,7 @@ const NARRATION_I_INSTRUCTION = `${SYSTEM_PREFIX}
 若设定上下文含“GM-ONLY ACTIVE SCENE DIRECTIVE”，必须先把该事件自然写进本轮场景，再处理或打断玩家原行动。事件尚未由系统宣告，不能假设玩家已经知道；只写主角可感知的内容，不输出事件ID、分支名或调度信息。
 
 字段：
-- narration：叙事文本。普通调查/对话请写约300-700字（至少3个有信息量的段落），包含环境、人物反应和行动结果；不要为了凑字重复背景，也不要把 options 或系统判定说明塞进 narration。
+- narration：按设定上下文中的“本轮叙事档位”控制篇幅。普通完成回合写450-750字、4-6个有信息量的段落；重大事件、新地点、重要线索或危机写700-1100字、6-9段；触发actions的检定前铺垫写200-400字并在不确定结果前停住。完成回合必须包含玩家行动结果、环境变化、相关NPC反应和至少一个可执行后果或新信息；不要为了凑字重复背景，也不要把options或系统判定说明塞进narration。
 - locations/npcs/items：新增或更新的实体（无则空数组）
 - npc.importance：key/supporting（路人直接在narration中描写）
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
@@ -90,7 +90,7 @@ on_success/on_fail/on_critical_success/on_critical_failure 只填 HP/SAN 联级�
 
 ${buildEntityReferenceRules(false)}
 
-For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity and san_event_id. For an authored scenario, only use a currently allowed SAN event ID from the scenario context: the server overrides the submitted severity and target, and rejects invented/repeated/early/wrong-location events. Never invent evidence IDs: only update clues supplied in the scenario context. Set secured=false when the player has found a clue but has not yet protected or recorded it; set secured=true only after the player explicitly obtains, records, compares, or otherwise preserves it. Suspicion should rise for public accusations, forced searches, threats, careless handling, or letting a suspect see protected evidence; it can fall after quiet cooperation or evidence protection. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
+For an authored scenario: each meaningful narrated turn costs at least 10 minutes. Use 10-15 for a conversation or quick examination, 15-25 for movement/searching, 25-40 for careful investigation, and 10-20 for a crisis. A sancheck must include san_severity and san_event_id. For an authored scenario, only use a currently allowed SAN event ID from the scenario context: the server overrides the submitted severity and target, and rejects invented/repeated/early/wrong-location events. Never invent evidence IDs: only update clues supplied in the scenario context. Set secured=false when the player has found a clue but has not yet protected it. Set secured=true only after an explicit preservation action such as photographing, recording, copying, rubbing, sampling, bagging, sealing, or carrying it away; merely observing, mentioning, comparing, or understanding a clue does not preserve it. Suspicion should rise for public accusations, forced searches, threats, careless handling, or letting a suspect see protected evidence; it can fall after quiet cooperation or evidence protection. Recommend an ending only when the player's stated action resolves the case using secured evidence.`;
 
 const NARRATION_II_INSTRUCTION = `${SYSTEM_PREFIX}
 For an authored scenario, use a minimum 10-minute meaningful turn and include san_severity plus a currently allowed san_event_id on every sancheck. Only catalogued evidence IDs may be updated.
@@ -99,7 +99,7 @@ For an authored scenario, use a minimum 10-minute meaningful turn and include sa
 若设定上下文含“GM-ONLY ACTIVE SCENE DIRECTIVE”，检定后的叙事必须继续遵守该场景事实，只写主角可感知的内容，不输出事件ID、分支名或调度信息。
 
 字段：
-- narration：承接判定结果的叙事文本，约300-700字（至少3个有信息量的段落），体现检定结果、人物反应和可执行的后果；不要重复系统掷骰文字。
+- narration：承接判定结果并按设定上下文中的“本轮叙事档位”写作。普通完成回合450-750字、4-6段；重大事件、新地点、重要线索或危机700-1100字、6-9段；递归触发actions时只写200-400字并停在新判定点。必须体现检定结果、环境变化、人物反应和可执行后果；不要重复系统掷骰文字。
 - locations/npcs/items：新增或更新的实体（无则空数组）
 - npc.baseDescription：稳定人设，75字以内（仅首次填写，后续不覆盖）
 - npc.currentState：动态状态，35字以内（可留空字符串）
@@ -111,7 +111,7 @@ For an authored scenario, use a minimum 10-minute meaningful turn and include sa
   - actions非空=递归检定（options填null）
   - actions为null=正常推进，${OPTIONS_RULE}
 
-每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}；若上下文含剧本时钟则按其规则裁定行动时间与状态。剧本证据只能使用上下文中的精确 ID；发现但未保全填 secured=false，明确取得/记录/保护后再填 secured=true。`;
+每次都必须输出 time_cost_minutes、time_cost_rationale、evidence_changes、suspicion_delta、combat_update、ending_recommendation。普通剧本固定填：0、空字符串、[]、0、null、{should_end:false,reason:""}；若上下文含剧本时钟则按其规则裁定行动时间与状态。剧本证据只能使用上下文中的精确 ID；发现但未保全填 secured=false，只有玩家明确拍照、录音、抄录、拓印、取样、装袋、封存或带走后才填secured=true，单纯观察、提及或理解不算保全。`;
 
 const SUMMARY_INSTRUCTION = `${SYSTEM_PREFIX}
 任务：总结迄今剧情，保证后续可正常推进，暗示故事可能的伏笔。
@@ -166,11 +166,9 @@ export const FLOW_THINKING = {
   [FlowType.ENDING_GEN]: true,
 };
 
-// ── reasoning_effort 配置（思考强度，仅思考模式下生效） ──
-// 官方文档：思考模式下默认 high；复杂 Agent 类请求自动 max
-// 注意：reasoning_effort='max' 会让 LLM 深度思考，消耗大量 max_tokens
-//   若 max_tokens 不足，思考会被截断，导致 LLM 无法进入输出阶段（content/tool_calls 都为空）
-// 因此 'max' 仅在 max_tokens 足够大（>= 8192）时使用，否则降级为 'high'
+// ── reasoning_effort 建议值 ──
+// 仅作为流程层提示；最终是否发送及发送何值由模型配置的 capabilities 与
+// flowPolicies 决定。DeepSeek 不接收此字段，未知兼容模型也会自动省略。
 export const FLOW_REASONING_EFFORT = {
   [FlowType.WORLD_GEN]: 'high',
   [FlowType.CHARACTER_GEN]: 'high',        // CoC 数值计算虽严谨，但 'max' 易导致思考截断，用 'high' 已足够

@@ -106,7 +106,7 @@ export class InputAssembler {
    * @returns {{ messages, flowType, temperature, maxTokens }}
    */
   assemble(flowType, session, options = {}) {
-    const { userText = '' } = options;
+    const { userText = '', narrationProfile = null } = options;
     const template = promptTemplateRegistry.getTemplate(flowType);
 
     const messages = [{ role: 'system', content: template.systemInstruction }];
@@ -122,13 +122,13 @@ export class InputAssembler {
         this._buildKeyCharacterGenMessages(messages, session, userText);
         break;
       case FlowType.STORY_OPENING:
-        this._buildStoryOpeningMessages(messages, session);
+        this._buildStoryOpeningMessages(messages, session, narrationProfile);
         break;
       case FlowType.NARRATION_I:
-        this._buildNarrationIMessages(messages, session, userText);
+        this._buildNarrationIMessages(messages, session, userText, narrationProfile);
         break;
       case FlowType.NARRATION_II:
-        this._buildNarrationIIMessages(messages, session);
+        this._buildNarrationIIMessages(messages, session, narrationProfile);
         break;
       case FlowType.HISTORY_SUMMARY:
         this._buildHistorySummaryMessages(messages, session);
@@ -156,6 +156,7 @@ export class InputAssembler {
       stop: FLOW_STOP[flowType] ?? null,
       tools,
       toolChoice,
+      narrationProfile,
     };
   }
 
@@ -234,24 +235,24 @@ export class InputAssembler {
   }
 
   /** 构建完整设定上下文（世界观+玩家+关键角色+地点+NPC+物品），持续发给LLM */
-  _buildFullSettingsContext(session) {
-    return necessarySettingsBuilder.build(session);
+  _buildFullSettingsContext(session, options = {}) {
+    return necessarySettingsBuilder.build(session, options);
   }
 
   // ── 故事开幕 ──
-  _buildStoryOpeningMessages(messages, session) {
+  _buildStoryOpeningMessages(messages, session, narrationProfile = null) {
     messages.push({
       role: 'user',
-      content: this._buildFullSettingsContext(session),
+      content: this._buildFullSettingsContext(session, { narrationProfile }),
     });
   }
 
   // ── 叙述I ──
-  _buildNarrationIMessages(messages, session, userText) {
+  _buildNarrationIMessages(messages, session, userText, narrationProfile = null) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
-      content: this._buildFullSettingsContext(session),
+      content: this._buildFullSettingsContext(session, { narrationProfile }),
     });
 
     // 注入角色 HP/SAN/属性 状态（追加到第一个 user message，不修改 system message）
@@ -272,11 +273,11 @@ export class InputAssembler {
   }
 
   // ── 叙述II ──
-  _buildNarrationIIMessages(messages, session) {
+  _buildNarrationIIMessages(messages, session, narrationProfile = null) {
     // 完整设定持续输入
     messages.push({
       role: 'user',
-      content: this._buildFullSettingsContext(session),
+      content: this._buildFullSettingsContext(session, { narrationProfile }),
     });
 
     // 注入角色 HP/SAN/属性 状态（追加到第一个 user message，不修改 system message）
