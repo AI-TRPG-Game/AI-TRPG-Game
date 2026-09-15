@@ -1,5 +1,20 @@
 # Birch Station pacing and finale validation
 
+## Evidence details and preflight validation
+
+Shared pure rules now drive component access and the evidence detail panel.
+Regression tests cover undiscovered-source concealment, structured action
+validation, partial preservation, multi-step rejection without model calls or
+gameplay mutation, supporting steps, and free safe movement versus combat.
+The complete backend suite and frontend build pass; legacy simulations remain
+covered. Full hybrid mock routes still reach endings within the action target.
+
+An isolated browser smoke test at port 5187 verified a new tutorial, expanding
+the details panel at pressure 0, rejecting movement-plus-investigation at pressure
+0, and unlocked buttons after clarification. No live model was used and the
+user's existing port-5173 save was not modified. The test server was stopped.
+This is not an exhaustive parser or live-prose quality validation.
+
 ## Scene consistency correction — 2026-09-15
 
 Added regressions for the exact reported negotiation on the first response to an

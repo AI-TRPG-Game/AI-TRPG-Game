@@ -174,11 +174,11 @@ export class ApiClient {
     return this._consumeSseStream(res, onDebug);
   }
 
-  async sendMessage(session, text, { onDebug } = {}) {
+  async sendMessage(session, text, { onDebug, action } = {}) {
     const res = await fetch(`${API_BASE}/sessions/${session.id}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session, text }),
+      body: JSON.stringify({ session, text, action }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return this._consumeSseStream(res, onDebug);

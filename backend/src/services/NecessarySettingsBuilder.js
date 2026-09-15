@@ -95,7 +95,7 @@ export class NecessarySettingsBuilder {
         .filter(npc => npc.locationId && npc.status !== 'departed')
         .map(npc => `${npc.id}=${npc.locationId}`);
       if (actorLocations.length) {
-        if (session.scenarioRules?.pacingVersion === 3) lines.push('引擎已结算本轮行动。NPC位置、合作、撤退和证据保全以结构化状态及本轮回执为准；不可只在文字中让人物同行、移动、同意作证或解除围堵。若回执没有记录成功，不得补写成功。林晚的证词跟随本人，既有副本跟随持有人，不绑定休息室。');
+        if (session.scenarioRules?.pacingVersion === 3) lines.push('引擎已结算本轮行动。每个选项只能有一个有意义的目标；移动与到达后的调查应分开，不提供“去某处然后搜查再找另一人”的组合选项。比例尺、标注等辅助步骤属于同一取证目标。NPC位置、合作、撤退和证据保全以结构化状态及本轮回执为准；不可只在文字中让人物同行、移动、同意作证或解除围堵。若回执没有记录成功，不得补写成功。林晚的证词跟随本人，既有副本跟随持有人，不绑定休息室。');
         lines.push(`GM-only actor positions: ${actorLocations.join(', ')}. Do not teleport actors; only narrate a move when the route and elapsed time make it plausible. A non-co-located actor's state is private GM information until the protagonist perceives evidence of it.`);
       }
       if (session.activeScene) {

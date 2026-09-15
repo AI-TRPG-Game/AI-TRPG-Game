@@ -1,6 +1,7 @@
 import { scenarioProgressService as progress } from './ScenarioProgressService.js';
+import { componentAccess, contactWitness, knownRoute, locationPatterns, requestedComponents } from '../../../src/shared/InvestigationRules.mjs';
 
-export const GUIDE = '调查会发现线索；拍照、取样、录音等保全行动才形成可复核的证据。可用中英文输入，也可点击证据栏的保全按钮：按钮仍是正常行动，不会绕过危险。检定前会说明风险。NPC显示的是你观察到的情况，不是其秘密或数值。安全处可用“包扎伤口”消耗敷料恢复生命，或“稳定情绪”缓解暂时压力；两者都消耗一次行动。最终决定只需提交一次，即使眼前危险尚未结束。';
+export const GUIDE = '每次只处理一个有意义的目标，移动与到达后的调查分开输入；比例尺、标注等辅助步骤可合并。模糊或多步骤输入会免费请求澄清；失败的实际检定仍消耗行动。证据栏“详细信息”免费显示各组件、已知条件和下一步，未知来源不会提前揭露。调查会发现线索；拍照、取样、录音等保全行动才形成可复核的证据。可用中英文输入，也可点击证据栏的保全按钮：按钮仍是正常行动，不会绕过危险。检定前会说明风险。NPC显示的是你观察到的情况，不是其秘密或数值。安全处可用“包扎伤口”消耗敷料恢复生命，或“稳定情绪”缓解暂时压力；两者都消耗一次行动。最终决定只需提交一次，即使眼前危险尚未结束。';
 const aliases = {
   evidence_001: /door|lock|scratch|门锁|门框|锁芯|刮痕/i,
   evidence_002: /mud|地毯|湿泥|泥粒/i,
@@ -25,10 +26,7 @@ export function state(session) {
 export function isHybrid(session) { return session.scenarioRules?.pacingVersion === 3; }
 const NEGOTIATION = /谈判|说服|分歧|争取信任|negotia|persuad|convince/i;
 export function witnessContact(session) {
-  const npc = session.npcs.find(n => n.id === 'npc_005');
-  return !!npc && npc.visibility !== 'hidden' && npc.status !== 'departed'
-    && npc.hp !== 0 && !/昏迷|无法交流/.test(npc.currentState || '')
-    && npc.locationId === session.playerLocationId;
+  return contactWitness(session);
 }
 // Establish the announced danger before classifying a response, but do not resolve
 // its event. The ordinary turn snapshot rolls this back when dice are canceled.
@@ -80,7 +78,7 @@ export function prepareAction(session, input) {
   s.transaction = tx;
   if (intent.clarification) return tx;
   tx.witnessTarget = /林晚|lin wan/i.test(input);
-  const locations = { loc_001: /first.class|compartment|头等包厢/i, loc_002: /baggage|luggage|行李车/i, loc_003: /platform|站台/i, loc_005: /waiting hall|waiting room|候车厅/i, loc_006: /station office|站务办公室/i, loc_007: /medical archive|医疗档案室/i, loc_008: /crew.*room|乘务员休息室/i, loc_009: /underground entrance|积水地下入口/i, loc_010: /transfer room|矿难转运室/i };
+  const locations = locationPatterns;
   if (/进入|前往|返回|回到|走进|赶到|先去|^去|go to|return to|enter|move to|head (?:to|for)/i.test(input)) {
     const destination = Object.entries(locations).find(([id, pattern]) => pattern.test(input) && session.locations.some(l => l.id === id));
     if (destination && !tx.wasCombat) {
@@ -88,12 +86,13 @@ export function prepareAction(session, input) {
       const companion = tx.witnessTarget && witnessContact(session) && session.scenarioFlags.witness_cooperating
         && /一起|带着|陪同|with|together/i.test(input) ? session.npcs.find(n => n.id === 'npc_005') : null;
       s.visited ||= [previous];
-      const safeReturn = s.visited.includes(destination[0]) && !['loc_004','loc_009','loc_010'].includes(destination[0]);
+      const route = knownRoute(session,destination[0]);
+      const safeReturn = route?.every(id=>s.visited.includes(id) && !['loc_004','loc_009','loc_010'].includes(id));
       progress.updatePlayerLocation(session, destination[0]);
       if (companion) { companion.locationId = destination[0]; tx.receipts.push('【同行】林晚与你一同移动。'); }
       const player = session.npcs.find(n => n.id === 'npc_000'); if (player) player.locationId = destination[0];
-      if (!s.visited.includes(destination[0])) s.visited.push(destination[0]);
-      tx.travelOnly = !intent.ids.length && !/调查|检查|询问|inspect|investigate|ask/i.test(input) && safeReturn;
+      for (const id of route || [destination[0]]) if (!s.visited.includes(id)) s.visited.push(id);
+      tx.travelOnly = (!intent.ids.length || companion && intent.ids.every(id=>id==='evidence_008')) && !intent.method && !/调查|检查|询问|inspect|investigate|ask/i.test(input) && safeReturn;
       tx.receipts.push(`【移动】到达${session.locations.find(l => l.id === destination[0]).name}。${tx.travelOnly ? '熟悉安全区域内的移动不单独增加压力。' : ''}`);
     }
   }
@@ -130,6 +129,7 @@ export function prepareAction(session, input) {
     tx.checks.unshift(danger);
   }
   if (!tx.checks.length) resolveAction(session);
+  tx.receipts.unshift(`【行动消耗】${tx.travelOnly ? '熟悉安全路线移动：0' : '处理当前目标：1'}次有效行动。`);
   return tx;
 }
 export function resolveAction(session) {
@@ -165,7 +165,7 @@ export function resolveAction(session) {
     if (existing?.secured) { tx.receipts.push(`【已经保全】${clue.source}`); continue; }
     if (id === 'evidence_008' && tx.deferWitness) continue;
     const carried = existing?.artifacts?.filter(a => a.custody === 'player').map(a => a.component) || [];
-    const accessible = id === 'evidence_008' ? witnessContact(session) || carried.length > 0 : (clue.locationIds || [clue.locationId]).includes(session.playerLocationId)
+    const accessible = id === 'evidence_008' ? witnessContact(session) || carried.length > 0 : carried.length > 0 || (clue.locationIds || [clue.locationId]).includes(session.playerLocationId)
       || (id === 'evidence_004' && session.inventory.some(i => i.id === 'item_001' && i.status !== '已失去'));
     if (!accessible) { tx.receipts.push(id === 'evidence_008' ? '【尚未完成】目前无法与林晚直接交流，也未持有可复制的证词或检修图。请先找到她并建立联系。' : `【尚未完成】${clue.source}不在可接触范围，请先前往相应地点。`); continue; }
     const equipped = session.inventory.some(i => i.id === 'item_field_kit' && i.status !== '已失去');
@@ -175,11 +175,11 @@ export function resolveAction(session) {
     const [record] = progress.applyEvidenceChanges(session, [{ id, secured: false }]);
     const evidence = record || session.evidence.find(e => e.id === id);
     // Compound needle/medical evidence requires both accessible components.
-    const components = id === 'evidence_003' ? [session.playerLocationId === 'loc_007' ? 'medical' : 'needle']
-      : id === 'evidence_006' ? [/画|painting|portrait/i.test(tx.input) && 'painting', /名册|register/i.test(tx.input) && 'register'].filter(Boolean)
-        : id === 'evidence_008' ? [/证词|录音|testimony/i.test(tx.input) && 'testimony', /检修图|map/i.test(tx.input) && 'map'].filter(Boolean) : ['record'];
+    const components = requestedComponents(session,id,tx.input);
     evidence.artifacts ||= [];
     if (secured) for (const component of components) {
+      const access = componentAccess(session,id,component);
+      if (!access.ok) { tx.receipts.push(`【尚未完成】${access.reason}`); continue; }
       if (id === 'evidence_008' && !liveWitness && !carried.includes(component)) { tx.receipts.push(`【尚未完成】未持有${component === 'map' ? '检修图' : '证词记录'}，不能凭空复制。`); continue; }
       evidence.artifacts.push({ method: tx.method, component, actionId: tx.id, locationId: session.playerLocationId, custody: 'player' });
     }

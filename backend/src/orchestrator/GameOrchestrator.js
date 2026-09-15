@@ -16,6 +16,8 @@ import { idAllocator } from '../services/IdAllocator.js';
 import { saveExtractor } from '../services/SaveExtractor.js';
 import { damageResolver } from '../services/DamageResolver.js';
 import { GUIDE, isHybrid, state as investigationState, evidenceIntent, prepareAction, resolveAction, observeNpcs, repeatedNarration, unsupportedEffects, engineNarrative, enterAnnouncedDanger } from '../services/InvestigationDirector.js';
+import { validateAction } from '../services/ActionValidator.js';
+import { actionText } from '../../../src/shared/InvestigationRules.mjs';
 import { endingService } from '../services/EndingService.js';
 import { HistorySummarizer } from '../services/HistorySummarizer.js';
 import { FLOW_REQUIRED_FIELD } from '../services/PromptTemplateRegistry.js';
@@ -573,7 +575,7 @@ export class GameOrchestrator {
     return stats;
   }
 
-  async handleMessage(sessionId, userText, { onDebug } = {}) {
+  async handleMessage(sessionId, userText, { onDebug, action } = {}) {
     const session = this.getSession(sessionId);
     // Defensive repair for callers that provide a partially migrated session.
     // GameSession normally performs this normalization in its constructor, but
@@ -599,6 +601,7 @@ export class GameOrchestrator {
     this.repository.save(session);
 
     let diceAwaiting = false;
+    if (action) userText = actionText(session,action) || '这个';
     const resolvedUserText = session.phase === Phase.STORY_PLAY
       ? optionResolver.resolve(userText, session.optionBuffer)
       : userText;
@@ -619,12 +622,14 @@ export class GameOrchestrator {
         return { session: session.toClientJSON(), result: { branch:'NOTEBOOK', scenarioMessages:[note] } };
       }
       if (isHybrid(session)) {
-        const clarification = evidenceIntent(session, modelUserText).clarification;
+        const preflight = session.finaleState?.stage || /最终决定|final (?:choice|decision)/i.test(modelUserText) ? {ok:true} : validateAction(session,modelUserText);
+        const clarification = !preflight.ok ? preflight.message : evidenceIntent(session, modelUserText).clarification;
         if (clarification) {
           session.subState = SubState.AWAITING_INPUT;
           this._recordSystemMessage(session, clarification);
           return { session: session.toClientJSON(), result: { branch: 'CLARIFICATION', scenarioMessages: [clarification] } };
         }
+        if (preflight.cost !== undefined) this._recordSystemMessage(session,`【本次行动】${preflight.kind==='move' ? '移动' : '处理一个当前目标'}；消耗${preflight.cost}次有效行动。检定失败仍消耗行动，取消未执行的检定不消耗。`);
       }
       const director = session.scenarioFlags.investigation;
       const commitmentOpen = isHybrid(session) ? director?.actions >= 24 || director?.climaxResolvedAt != null : session.scenarioClock?.currentTime >= '05:40';

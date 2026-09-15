@@ -1,5 +1,6 @@
 import { apiClient } from '../api/ApiClient.js';
 import { sessionStore } from '../persistence/SessionStore.js';
+import { evidenceDetails, actionText } from '../shared/InvestigationRules.mjs';
 import {
   getNpcCondition,
   getGamePhaseLabel,
@@ -858,7 +859,7 @@ export class GameUIController {
   }
 
   // ── 核心操作 ──
-  async _sendMessage() {
+  async _sendMessage(action) {
     if (this._isInputBlocked()) return;
     const text = this.promptInput.value.trim();
     if (!text) return;
@@ -874,6 +875,7 @@ export class GameUIController {
 
     try {
       const resp = await apiClient.sendMessage(this.session, text, {
+        action,
         onDebug: (log) => this._appendDebugPanel(log),
       });
       this._renderLlmResponse(resp, { scrollState });
@@ -1125,6 +1127,14 @@ export class GameUIController {
     this.promptInput.disabled = blocked;
     this.sendButton.disabled = blocked;
     if (this.modelProfileSelect) this.modelProfileSelect.disabled = blocked;
+    // The sidebar is rebuilt before an in-flight request is unlocked. Update
+    // its existing buttons too, rather than leaving their rendered disabled flag.
+    this.evidencePanel?.querySelectorAll('[data-preserve], [data-game-help]').forEach(button => {
+      button.disabled = blocked;
+      button.title = blocked
+        ? (this.session?.subState === 'DICE_PENDING' ? '请先确认或取消当前检定' : '当前暂不可行动，请等待处理完成')
+        : (button.hasAttribute('data-preserve') ? '提交这项保全行动' : '查看玩法帮助');
+    });
   }
 
   async _initLauncher() {
@@ -1294,7 +1304,9 @@ export class GameUIController {
           const status = item.secured ? '已保全（可用于证明）' : '已发现（不计入证明）';
           const source = item.source || definition.source || '未命名线索';
           const description = item.description || definition.description || '';
-          const nextStep = !item.secured && definition.preservationHint
+          const detail = this.session.scenarioRules?.pacingVersion===3 ? evidenceDetails(this.session,item.id) : null;
+          const detailsHtml = detail ? `<details><summary>详细信息（查看不消耗行动）</summary>${detail.rows.map(row=>`<div><small>${row.done?'✓':'○'} ${escapeHtml(row.label)}</small><small>条件：${escapeHtml(row.requirement)}</small><small>${escapeHtml(row.reason)}</small>${row.action ? `<button type="button" data-preserve="${escapeHtml(item.id)}" data-action="${escapeHtml(JSON.stringify(row.action))}">${escapeHtml(row.text)}</button>`:''}</div>`).join('')}</details>` : '';
+          const nextStep = detail ? detailsHtml : !item.secured && definition.preservationHint
             ? `<small>下一步：${escapeHtml(definition.preservationHint)}</small><button type="button" data-preserve="${escapeHtml(item.id)}" ${this._isInputBlocked() ? 'disabled' : ''}>执行保全行动</button>`
             : '';
           return `<div class="sidebar-evidence-item"><span class="sidebar-evidence-status">${item.secured ? '✓' : '•'}</span><span><strong>${escapeHtml(source)}</strong><small>${escapeHtml(status)}${description ? ` · ${escapeHtml(description)}` : ''}</small>${nextStep}</span></div>`;
@@ -1305,6 +1317,14 @@ export class GameUIController {
       this.evidencePanel.querySelectorAll('[data-preserve]').forEach(button => {
         button.onclick = () => {
           if (this._isInputBlocked()) return;
+          if (button.dataset.action) {
+            const action = JSON.parse(button.dataset.action);
+            const text = actionText(this.session,action);
+            if (!text) return;
+            this.promptInput.value=text;
+            this._sendMessage(action);
+            return;
+          }
           const clue = catalog[button.dataset.preserve];
           this.promptInput.value = `保全${clue.source}：${clue.preservationHint}`;
           this._sendMessage();

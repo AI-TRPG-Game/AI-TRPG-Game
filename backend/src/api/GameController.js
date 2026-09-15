@@ -356,6 +356,7 @@ export function createGameController({ llmProvider, llmProviderRegistry }) {
       const session = requireSession(req);
       const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       const result = await once(req, () => orchestrator.handleMessage(req.params.id, text.trim(), {
+        action: req.body.action,
         onDebug: (log) => sendSse('debug', log),
       }));
       sendSse('done', result);
