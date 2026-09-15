@@ -4,8 +4,10 @@ import { optionResolver } from '../src/services/OptionResolver.js';
 import { inputAssembler } from '../src/services/InputAssembler.js';
 import { FlowType, SubState } from '../src/domain/enums.js';
 import { GameSession } from '../src/domain/GameSession.js';
+import { buildNarrationStrictSchema } from '../src/domain/StrictSchemaRegistry.js';
 import { getDatabase } from '../src/persistence/database.js';
 import { SessionRepository } from '../src/persistence/SessionRepository.js';
+import { BIRCH_STATION_ID } from '../src/scenarios/birchStation.js';
 
 const raw = `<narration>夜幕降临</narration>
 <location>码头区：咸腥的海风</location>
@@ -51,7 +53,7 @@ console.assert(
 const streamingSession = new GameSession({
   id: 'streaming',
   subState: SubState.LLM_STREAMING,
-  pendingDiceFlow: { diceNotation: '1d100' },
+  pendingDiceFlow: { actions: [{ type: 'skill_check', skill_name: '侦查', skill_point: 50, bonus_dice: 0, penalty_dice: 0, on_success: [], on_fail: [] }], pendingRaw: '{}' },
 });
 console.assert(
   streamingSession.toJSON().subState === SubState.LLM_STREAMING,
@@ -74,11 +76,28 @@ console.assert(
 const diceSession = new GameSession({
   id: 'dice',
   subState: SubState.DICE_PENDING,
-  pendingDiceFlow: { diceNotation: '1d100' },
+  pendingDiceFlow: { actions: [{ type: 'skill_check', skill_name: '侦查', skill_point: 50, bonus_dice: 0, penalty_dice: 0, on_success: [], on_fail: [] }], pendingRaw: '{}' },
 });
 console.assert(
   diceSession.toClientJSON().subState === SubState.DICE_PENDING,
   'client snapshot preserves dice pending state'
 );
+
+const narrationSchema = buildNarrationStrictSchema();
+console.assert(
+  Object.keys(narrationSchema.properties).every(key => narrationSchema.required.includes(key)) &&
+  narrationSchema.required.length === Object.keys(narrationSchema.properties).length,
+  'strict narration schema requires every declared property'
+);
+
+const migratedBirchSession = new GameSession({
+  id: 'old-birch',
+  scenarioId: BIRCH_STATION_ID,
+  scenarioRules: { time: { minimumMinutes: 10, maximumMinutes: 60 } },
+  scheduledEvents: [{ id: 'broadcast_0040', at: '00:40', fired: true }],
+  locations: [{ id: 'loc_001', name: '头等包厢外', description: '' }],
+});
+console.assert(migratedBirchSession.playerLocationId === 'loc_001', 'legacy Birch session gains initial player location');
+console.assert(migratedBirchSession.locations.some(location => location.id === 'loc_003'), 'legacy Birch session reveals locations for events that already fired');
 
 console.log('All tests passed');

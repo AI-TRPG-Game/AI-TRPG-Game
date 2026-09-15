@@ -1,11 +1,27 @@
 const API_BASE = '/api';
 
 export class ApiClient {
-  async createSession(title = '新剧本') {
+  async getLlmProfiles() {
+    const res = await fetch(`${API_BASE}/llm/profiles`);
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  async createSession(title = '新剧本', llmProfileId = null) {
     const res = await fetch(`${API_BASE}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, llmProfileId }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  async createBirchStationTutorial(llmProfileId = null) {
+    const res = await fetch(`${API_BASE}/sessions/tutorials/birch-station`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llmProfileId }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return res.json();
@@ -158,11 +174,11 @@ export class ApiClient {
     return this._consumeSseStream(res, onDebug);
   }
 
-  async sendMessage(session, text, { onDebug } = {}) {
+  async sendMessage(session, text, { onDebug, action } = {}) {
     const res = await fetch(`${API_BASE}/sessions/${session.id}/message`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session, text }),
+      body: JSON.stringify({ session, text, action }),
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return this._consumeSseStream(res, onDebug);
@@ -176,6 +192,21 @@ export class ApiClient {
     });
     if (!res.ok) throw new Error(await this._errorText(res));
     return this._consumeSseStream(res, onDebug, onSystemMessage);
+  }
+
+  /**
+   * 重启故事（结局后用户点"是"）。
+   * @param {Object} session - 当前 session
+   * @returns {Promise<{session: Object}>}
+   */
+  async restartStory(session) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/restart-story`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
   }
 
   /**
@@ -256,6 +287,21 @@ export class ApiClient {
 
   async cancelDice(session) {
     const res = await fetch(`${API_BASE}/sessions/${session.id}/dice-cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    });
+    if (!res.ok) throw new Error(await this._errorText(res));
+    return res.json();
+  }
+
+  /**
+   * 重启故事（结局后用户点"是"）。
+   * @param {Object} session - 当前 session
+   * @returns {Promise<{session: Object}>}
+   */
+  async restartStory(session) {
+    const res = await fetch(`${API_BASE}/sessions/${session.id}/restart-story`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session }),

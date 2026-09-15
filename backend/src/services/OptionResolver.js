@@ -40,7 +40,10 @@ export class OptionResolver {
     if (resolvedParts.length === 0) return trimmed;
 
     const optionText = resolvedParts.join('；');
-    const remainder = trimmed.replace(OPTION_LETTER_PATTERN, '').trim();
+    const remainder = trimmed
+      .replace(OPTION_LETTER_PATTERN, '')
+      .replace(/^[\s，,。:：、]+/, '')
+      .trim();
 
     if (remainder) {
       return `${optionText}。${remainder}`;

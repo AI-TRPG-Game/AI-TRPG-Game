@@ -77,8 +77,8 @@ export class HistorySummarizer {
       return raw;
     }
 
-    // 第二次重试：继续用思考模式 high + 更强的 reminder（与 GameOrchestrator 简化策略一致）
-    // 不再切换到非思考模式 + tool_choice='required'：strict: true 已强制调用 function，且思考模式与 tool_choice 冲突
+    // 第二次重试沿用当前模型配置并加强 reminder；provider 会按模型能力
+    // 决定可用的推理与 tool_choice 参数。
     const strongerReminder = `\n\n【重要提醒】上一次响应未通过解析（缺少 "${SUMMARY}" 字段）。请务必通过调用指定函数返回合法 JSON，且必须包含 "${SUMMARY}" 字段；不要直接输出文本、markdown 或代码块。`;
     const retryMessages2 = [...assembled.messages];
     const lastUserIdx2 = retryMessages2.map(m => m.role).lastIndexOf('user');

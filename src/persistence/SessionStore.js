@@ -25,9 +25,11 @@ function runStore(mode, fn) {
         const tx = db.transaction(STORE_NAME, mode);
         const store = tx.objectStore(STORE_NAME);
         const request = fn(store);
-        request.onsuccess = () => resolve(request.result);
+        let result;
+        request.onsuccess = () => { result = request.result; };
         request.onerror = () => reject(request.error);
-        tx.oncomplete = () => db.close();
+        tx.oncomplete = () => { db.close(); resolve(result); };
+        tx.onabort = () => { db.close(); reject(tx.error || new Error('保存事务已取消')); };
         tx.onerror = () => {
           db.close();
           reject(tx.error);
@@ -45,6 +47,7 @@ function normalizeSession(session) {
   return {
     id: session.id,
     title: session.title || '新剧本',
+    llmProfileId: session.llmProfileId ?? null,
     phase: session.phase || 'WORLD_SETTING',
     subState: recoveredSubState,
     openingDone: Boolean(session.openingDone),
@@ -68,6 +71,25 @@ function normalizeSession(session) {
     recentReasoningContents: Array.isArray(session.recentReasoningContents)
       ? session.recentReasoningContents.slice(-10)
       : [],
+    // 新手试炼的时间驱动状态必须与普通会话一起持久化。
+    // 此前 normalizeSession 丢弃这些字段，导致 API 已创建的试炼会话
+    // 一写入 IndexedDB 就退化为没有时钟的普通会话。
+    scenarioId: session.scenarioId ?? null,
+    scenarioRules: session.scenarioRules ?? null,
+    scenarioClock: session.scenarioClock ?? null,
+    playerLocationId: session.playerLocationId ?? null,
+    sanity: session.sanity ?? null,
+    scheduledEvents: Array.isArray(session.scheduledEvents) ? session.scheduledEvents : [],
+    activeScene: session.activeScene ?? null,
+    scenarioFlags: session.scenarioFlags && typeof session.scenarioFlags === 'object'
+      ? session.scenarioFlags
+      : {},
+    evidence: Array.isArray(session.evidence) ? session.evidence : [],
+    suspicion: Number.isFinite(session.suspicion) ? session.suspicion : 0,
+    combat: session.combat ?? null,
+    finalChoice: session.finalChoice ?? null,
+    endingState: session.endingState ?? null,
+    finaleState: session.finaleState ?? null,
     createdAt: session.createdAt || now,
     updatedAt: session.updatedAt || now,
     sortOrder: session.sortOrder ?? Date.now(),

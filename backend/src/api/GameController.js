@@ -1,11 +1,20 @@
 import express from 'express';
 import cors from 'cors';
+import { createHash } from 'node:crypto';
 import { GameOrchestrator } from '../orchestrator/GameOrchestrator.js';
 import { RequestSessionRepository } from '../persistence/RequestSessionRepository.js';
 
-function createStatelessOrchestrator({ session, llmProvider }) {
+function createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry, requestedProfileId = null }) {
+  let selectedProvider = llmProvider;
+  let llmProfileId = session?.llmProfileId || requestedProfileId || null;
+  if (llmProviderRegistry) {
+    const resolved = llmProviderRegistry.resolve(llmProfileId);
+    selectedProvider = resolved.provider;
+    llmProfileId = resolved.id;
+    if (session) session.llmProfileId = llmProfileId;
+  }
   const repository = new RequestSessionRepository(session);
-  return new GameOrchestrator({ repository, llmProvider });
+  return new GameOrchestrator({ repository, llmProvider: selectedProvider, llmProfileId });
 }
 
 function requireSession(req) {
@@ -43,14 +52,67 @@ function startSseStream(res) {
   };
 }
 
-export function createGameController({ llmProvider }) {
+export function createGameController({ llmProvider, llmProviderRegistry }) {
   const router = express.Router();
+  // Retry identical snapshots without rerolling dice or invoking the model twice.
+  // Bounded process-local cache; browser persistence remains unchanged.
+  const submissions = new Map();
+  function once(req, operation) {
+    const key = createHash('sha256').update(req.path + JSON.stringify(req.body)).digest('hex');
+    for (const [id, entry] of submissions) if (Date.now() - entry.at > 900000) submissions.delete(id);
+    if (submissions.has(key)) return submissions.get(key).promise;
+    if (submissions.size >= 32) submissions.delete(submissions.keys().next().value);
+    const promise = Promise.resolve().then(operation).catch(error => { submissions.delete(key); throw error; });
+    submissions.set(key, { at: Date.now(), promise });
+    return promise;
+  }
+
+  router.get('/llm/profiles', (_req, res) => {
+    if (llmProviderRegistry) {
+      return res.json({
+        profiles: llmProviderRegistry.listPublicProfiles(),
+        defaultProfileId: llmProviderRegistry.defaultProfileId,
+      });
+    }
+    const fallbackId = `${llmProvider?.provider || 'default'}:${llmProvider?.model || 'default'}`;
+    return res.json({
+      profiles: [{
+        id: fallbackId,
+        label: llmProvider?.model || '默认模型',
+        description: '服务器默认模型',
+        provider: llmProvider?.provider || 'default',
+        model: llmProvider?.model || 'default',
+        configured: Boolean(llmProvider?.apiKey),
+        isDefault: true,
+      }],
+      defaultProfileId: fallbackId,
+    });
+  });
 
   router.post('/sessions', (req, res) => {
     try {
-      const orchestrator = createStatelessOrchestrator({ session: null, llmProvider });
+      const orchestrator = createStatelessOrchestrator({
+        session: null,
+        llmProvider,
+        llmProviderRegistry,
+        requestedProfileId: req.body?.llmProfileId,
+      });
       const session = orchestrator.createSession(req.body?.title);
       res.json({ session: session.toClientJSON() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/sessions/tutorials/birch-station', (req, res) => {
+    try {
+      const orchestrator = createStatelessOrchestrator({
+        session: null,
+        llmProvider,
+        llmProviderRegistry,
+        requestedProfileId: req.body?.llmProfileId,
+      });
+      res.json(orchestrator.createBirchStationTutorial());
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -59,7 +121,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/enter-world', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.enterWorldSetting(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -69,7 +131,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/enter-character', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.enterCharacterSetting(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -79,7 +141,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/save-world', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.saveWorld(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -89,7 +151,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/save-character', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.saveCharacter(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -99,7 +161,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/player', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.updatePlayer(req.params.id, req.body.player));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -111,7 +173,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/enter-key-character', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.enterKeyCharacterSetting(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -121,7 +183,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/save-key-character', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.saveKeyCharacter(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -131,7 +193,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/invite-next-key-character', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.inviteNextKeyCharacter(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -141,7 +203,7 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/open-story-confirm', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.getStoryOpenConfirmInfo(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
@@ -159,7 +221,7 @@ export function createGameController({ llmProvider }) {
     const sendSse = startSseStream(res);
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       const result = await orchestrator.openStory(req.params.id, {
         onDebug: (log) => sendSse('debug', log),
       });
@@ -175,12 +237,12 @@ export function createGameController({ llmProvider }) {
     const sendSse = startSseStream(res);
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
-      const result = await orchestrator.confirmDice(req.params.id, {
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
+      const result = await once(req, () => orchestrator.confirmDice(req.params.id, {
         onDebug: (log) => sendSse('debug', log),
         // 系统判定结果在 LLM 调用前就推送，让用户立即看到【使用XX技能（技能点YY），判定结果Z，等级】
         onSystemMessage: (msg) => sendSse('system-message', { message: msg }),
-      });
+      }));
       sendSse('done', result);
     } catch (err) {
       sendSse('error', { message: err.message });
@@ -192,8 +254,19 @@ export function createGameController({ llmProvider }) {
   router.post('/sessions/:id/dice-cancel', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.cancelDice(req.params.id));
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ── 重启故事（结局后用户点"是"） ──
+  router.post('/sessions/:id/restart-story', (req, res) => {
+    try {
+      const session = requireSession(req);
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
+      res.json(orchestrator.restartStory(req.params.id));
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -204,7 +277,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/world-settings', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.updateWorldSettings(req.params.id, req.body.worldSettings));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -212,7 +285,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/locations', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.upsertLocation(req.params.id, req.body.index ?? -1, req.body.data));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -220,7 +293,7 @@ export function createGameController({ llmProvider }) {
   router.delete('/sessions/:id/locations/:index', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.deleteLocation(req.params.id, Number(req.params.index)));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -228,7 +301,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/npcs', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.upsertNpc(req.params.id, req.body.index ?? -1, req.body.data));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -236,7 +309,7 @@ export function createGameController({ llmProvider }) {
   router.delete('/sessions/:id/npcs/:index', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.deleteNpc(req.params.id, Number(req.params.index)));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -244,7 +317,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/items', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.upsertItem(req.params.id, req.body.index ?? -1, req.body.data));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -252,7 +325,7 @@ export function createGameController({ llmProvider }) {
   router.delete('/sessions/:id/items/:index', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.deleteItem(req.params.id, Number(req.params.index)));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -260,7 +333,7 @@ export function createGameController({ llmProvider }) {
   router.patch('/sessions/:id/key-characters', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.upsertKeyCharacter(req.params.id, req.body.index ?? -1, req.body.data));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -268,7 +341,7 @@ export function createGameController({ llmProvider }) {
   router.delete('/sessions/:id/key-characters/:index', (req, res) => {
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
       res.json(orchestrator.deleteKeyCharacter(req.params.id, Number(req.params.index)));
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
@@ -281,10 +354,11 @@ export function createGameController({ llmProvider }) {
     const sendSse = startSseStream(res);
     try {
       const session = requireSession(req);
-      const orchestrator = createStatelessOrchestrator({ session, llmProvider });
-      const result = await orchestrator.handleMessage(req.params.id, text.trim(), {
+      const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
+      const result = await once(req, () => orchestrator.handleMessage(req.params.id, text.trim(), {
+        action: req.body.action,
         onDebug: (log) => sendSse('debug', log),
-      });
+      }));
       sendSse('done', result);
     } catch (err) {
       sendSse('error', { message: err.message });
@@ -296,11 +370,12 @@ export function createGameController({ llmProvider }) {
   return router;
 }
 
-export function createApp({ llmProvider }) {
+export function createApp({ llmProvider, llmProviderRegistry, lifecycleMiddleware }) {
   const app = express();
+  if (lifecycleMiddleware) app.use(lifecycleMiddleware);
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
-  app.use('/api', createGameController({ llmProvider }));
+  app.use('/api', createGameController({ llmProvider, llmProviderRegistry }));
   app.get('/health', (_req, res) => res.json({ status: 'ok' }));
   return app;
 }
