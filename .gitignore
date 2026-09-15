@@ -24,6 +24,7 @@ desktop.ini
 
 # Build output
 dist/
+.player-runtime/
 build/
 
 # Logs

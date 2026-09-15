@@ -7,6 +7,12 @@ export class NecessarySettingsBuilder {
       `世界观：${session.worldSettings || '（未设定）'}`,
       `玩家：${session.player || '（未设定）'}`,
     ];
+    if (session.scenarioRules?.pacingVersion === 3) {
+      const director = session.scenarioFlags?.investigation;
+      lines.push(`【引擎行动记录】${JSON.stringify(director?.transaction || {})}`);
+      lines.push('仅描述引擎已解决的结果。不得自行增加伤害、证据保全、获得物品或战斗结果。未解决检定只能描述准备，不能声称命中。重复前文不算推进。章节与行动决定进度，分钟仅为氛围，不得自行宣布发车。');
+      lines.push(`【章节】${director?.act || 'opening'}；已完成行动${director?.actions || 0}/26。每次回应必须体现本次行动的新结果。`);
+    }
 
     if (session.keyCharacters && session.keyCharacters.length > 0) {
       const keyCharsList = session.keyCharacters
@@ -71,6 +77,14 @@ export class NecessarySettingsBuilder {
     }
 
     if (session.scenarioClock) {
+      if (session.combat) lines.push(`当前直接危险：${JSON.stringify(session.combat)}。成功逃脱、谈判或满足退出条件时必须明确combat_update.active=false；不要把普通调查描述成仍在战斗。`);
+      if (session.finaleState) lines.push(`终局阶段：${session.finaleState.stage}；已完成危机行动${session.finaleState.completedActions || 0}/3。只解决眼前危险，不引入新调查、无关威胁或新的战斗。最多第三次行动后由引擎收束。`);
+      if (session.finaleState?.resolutionOutcome) lines.push(`已确定的危机结果，结局必须承接：${JSON.stringify(session.finaleState.resolutionOutcome)}`);
+      if (session.scenarioFlags?.train_departed) lines.push('列车已离站，这是不可改写的事实。禁止登车、赶上列车或声称主角在发车前离开；撤离路线为站外公路。');
+      if (session.scenarioRules?.pacingVersion === 2) {
+        lines.push('耗时由引擎按行动类别决定。复合请求只处理第一个有意义的行动，其余步骤留待下一次选择。');
+        if (session.scenarioClock.currentTime >= '05:00') lines.push('调查进入收束阶段：选项只围绕已发现证据的保全、已遇证人的立场和撤离，不再开辟无关调查支线。');
+      }
       const sanState = scenarioProgressService.getPlayerSanState(session);
       const suspicionState = scenarioProgressService.getSuspicionState(session.suspicion);
       const truthProgress = scenarioProgressService.evaluateTruth(session);
@@ -81,6 +95,7 @@ export class NecessarySettingsBuilder {
         .filter(npc => npc.locationId && npc.status !== 'departed')
         .map(npc => `${npc.id}=${npc.locationId}`);
       if (actorLocations.length) {
+        if (session.scenarioRules?.pacingVersion === 3) lines.push('引擎已结算本轮行动。NPC位置、合作、撤退和证据保全以结构化状态及本轮回执为准；不可只在文字中让人物同行、移动、同意作证或解除围堵。若回执没有记录成功，不得补写成功。林晚的证词跟随本人，既有副本跟随持有人，不绑定休息室。');
         lines.push(`GM-only actor positions: ${actorLocations.join(', ')}. Do not teleport actors; only narrate a move when the route and elapsed time make it plausible. A non-co-located actor's state is private GM information until the protagonist perceives evidence of it.`);
       }
       if (session.activeScene) {

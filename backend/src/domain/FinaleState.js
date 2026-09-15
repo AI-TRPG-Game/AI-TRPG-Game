@@ -44,21 +44,31 @@ export function repairFinaleState(session) {
   const clockWasFinale = session.scenarioClock.mode === 'finale';
   session.scenarioClock.mode = 'finale';
   session.scenarioClock.phase = 'finale';
+  session.scenarioFlags ||= {};
+  session.scenarioFlags.train_departed = true;
 
   const previousStage = session.finaleState?.stage || null;
   if (TERMINAL_STAGES.has(previousStage)) {
+    if (previousStage === 'complete') session.subState = 'RESTART_PENDING';
     session.optionBuffer = '';
     session.pendingDiceFlow = null;
     session.combat = null;
     return { repaired: !clockWasFinale, stage: previousStage };
   }
 
-  const stage = session.combat?.active ? 'resolve_scene' : 'decision';
+  const stage = previousStage === 'decision' ? 'decision' : session.combat?.active ? 'resolve_scene' : 'decision';
+  const entries = session.chatRecord || [];
+  const gateIndex = entries.findIndex(entry => entry.role === 'system' && /06:00 · 终局/.test(entry.content || ''));
+  const recovered = gateIndex < 0 ? 0 : entries.slice(gateIndex + 1).filter(entry =>
+    entry.role === 'kp' && ['NARRATION_I', 'NARRATION_II'].includes(entry.flowType) && !entry.parsed?.actions?.length).length;
   session.finaleState = {
     ...(session.finaleState || {}),
     stage,
     enteredAt: session.finaleState?.enteredAt || session.scenarioClock.currentTime,
     reason: session.finaleState?.reason || 'deadline',
+    completedActions: Number.isInteger(session.finaleState?.completedActions) ? session.finaleState.completedActions : Math.min(3, recovered),
+    crisisSnapshot: session.finaleState?.crisisSnapshot || (session.combat ? structuredClone(session.combat) : null),
+    migration: session.finaleState?.migration || (gateIndex < 0 ? 'budget_initialized' : 'history_recovered'),
   };
 
   if (stage === 'decision') {

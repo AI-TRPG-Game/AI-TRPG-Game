@@ -1,3 +1,5 @@
+import { evidenceIntent } from './InvestigationDirector.js';
+
 const SUSPICION_STATES = [
   { min: 8, id: 'crisis', label: '危机', effect: '对手已经公开行动，随时可能发生正面对抗或证据抢夺。' },
   { min: 6, id: 'obstructed', label: '受阻', effect: '嫌疑人会限制调查，并可能转移或损坏尚未保全的证据。' },
@@ -15,7 +17,7 @@ const SAN_STATES = [
 ];
 
 const DISCOVERY_INTENT = /检查|查看|观察|搜索|搜查|调查|翻找|比对|核对|询问|追问|检验|分析|inspect|examine|search|investigate|compare|question|analy[sz]e/i;
-const PRESERVATION_INTENT = /拍照|摄影|录像|录音|抄录|誊写|复制|复印|拓印|拓片|取样|采样|收集|拾取|捡起|包起|装袋|封存|密封|保存|保全|取得|收起|带走|交给.{0,8}(?:可信|警方|报社|同伴)|photograph|record|copy|rub(?:bing)?|sample|collect|pick\s*up|bag|seal|preserve|secure|take\s+away/i;
+const PRESERVATION_INTENT = /拍照|拍摄|摄影|录像|录音|抄录|誊写|复制|复印|拓印|拓片|取样|采样|收集|拾取|捡起|包起|装袋|封存|密封|保存|保全|取得|收起|带走|交给.{0,8}(?:可信|警方|报社|同伴)|photograph|record|copy|rub(?:bing)?|sample|collect|pick\s*up|bag|seal|preserve|secure|take\s+away/i;
 
 function toMinutes(value) {
   const match = /^(\d{2}):(\d{2})$/.exec(value || '');
@@ -59,8 +61,10 @@ export class ScenarioProgressService {
     const resolved = new Set(session.sanity?.resolvedEventIds || []);
     return Object.entries(events)
       .filter(([id, event]) => !resolved.has(id)
-        && (toMinutes(event.at) ?? Infinity) <= (current ?? -1)
-        && (!event.locationId || event.locationId === session.playerLocationId))
+        && (session.scenarioRules?.pacingVersion === 3 || (toMinutes(event.at) ?? Infinity) <= (current ?? -1))
+        && (session.scenarioRules?.pacingVersion === 3 && id.includes('confession')
+          ? session.npcs.some(n => n.id === 'npc_005' && n.locationId === session.playerLocationId && n.status !== 'departed' && n.visibility !== 'hidden' && n.hp !== 0 && !/昏迷|无法交流/.test(n.currentState || ''))
+          : (session.scenarioRules?.pacingVersion === 3 && id.includes('blackout') ? session.playerLocationId === 'loc_001' : !event.locationId || event.locationId === session.playerLocationId)))
       .map(([id, event]) => ({ id, ...event }));
   }
 
@@ -151,7 +155,8 @@ export class ScenarioProgressService {
     const text = userText.trim().toLowerCase();
     if (!text) return [];
     const isDiscovery = DISCOVERY_INTENT.test(text);
-    const isPreservation = PRESERVATION_INTENT.test(text);
+    const intent = evidenceIntent(session, userText);
+    const isPreservation = PRESERVATION_INTENT.test(text) || !!intent.method;
     if (!isDiscovery && !isPreservation) return [];
     const currentLocationId = session.playerLocationId;
     return Object.entries(catalog)
@@ -164,7 +169,7 @@ export class ScenarioProgressService {
           : (clue.locationId ? [clue.locationId] : []);
         if (allowedLocations.length > 0 && !allowedLocations.includes(currentLocationId)) return false;
         const keywords = Array.isArray(clue.keywords) ? clue.keywords : [];
-        return keywords.some(keyword => text.includes(String(keyword).toLowerCase()));
+        return intent.ids.includes(id) || keywords.some(keyword => text.includes(String(keyword).toLowerCase()));
       })
       .map(([id]) => ({ id, secured: isPreservation }));
   }
@@ -174,10 +179,12 @@ export class ScenarioProgressService {
     if (!clue) return false;
     const text = String(userText || '').trim().toLowerCase();
     if (!text) return false;
+    if (/do not|don't|won't|不要|不打算|拒绝|如果|假如/i.test(text)) return false;
     const keywords = [clue.source, ...(clue.keywords || [])]
       .filter(Boolean)
       .map(value => String(value).toLowerCase());
-    return PRESERVATION_INTENT.test(text) && keywords.some(keyword => text.includes(keyword));
+    const intent = evidenceIntent(session, userText);
+    return (PRESERVATION_INTENT.test(text) || !!intent.method) && (intent.ids.includes(evidenceId) || keywords.some(keyword => text.includes(keyword)));
   }
 
   getEvidenceProgress(session) {

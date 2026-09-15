@@ -29,7 +29,8 @@ const injured = getNpcCondition({ hp: 4, maxHp: 10, san: 35, maxSan: 60 });
 const unknown = getNpcCondition({ hp: null, maxHp: null, san: null, maxSan: null });
 assert(healthy === '无明显伤势 | 稳定', '健康 NPC 应只显示质性状态');
 assert(injured === '重伤 | 动摇', '受伤 NPC 应只显示质性状态');
-assert(unknown === '状态不明', '任一关键数值未知时应统一显示状态不明');
+assert(unknown === '尚未观察', '没有观察记录时不能伪造状态');
+assert(getNpcCondition({ hp: null, san: null, observation: { physical: '可见伤势', emotional: '受到惊吓' } }) === '可见伤势 | 受到惊吓', '可观察状态不依赖NPC数值');
 assert(!/[0-9]|\b(?:HP|SAN)\b/.test(`${healthy}${injured}${unknown}`), '非玩家状态文本不应包含数字 HP/SAN');
 
 const presentationSession = {

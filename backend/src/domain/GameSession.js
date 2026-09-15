@@ -170,6 +170,8 @@ export class GameSession {
     this.scenarioRules = {
       ...authoredRules,
       ...oldRules,
+      pacingVersion: oldRules.pacingVersion || 1,
+      time: oldRules.time || (oldRules.pacingVersion >= 2 ? authoredRules.time : { minimumMinutes: 10, maximumMinutes: 60 }),
       initialLocationId: oldRules.initialLocationId || authoredRules.initialLocationId,
       locationCatalog: oldRules.locationCatalog || authoredRules.locationCatalog,
       sanEvents: Object.fromEntries(Object.entries(authoredRules.sanEvents).map(([id, event]) => [
@@ -197,6 +199,7 @@ export class GameSession {
         }
         : event;
       if (!event.status) merged.status = event.fired ? 'resolved' : (authored?.status || 'dormant');
+      if (this.scenarioRules.pacingVersion < 2 && event.minimumResponseTurns === undefined) delete merged.minimumResponseTurns;
       if (merged.revealed === undefined) merged.revealed = Boolean(event.fired);
       return merged;
     });

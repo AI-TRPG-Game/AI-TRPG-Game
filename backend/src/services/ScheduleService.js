@@ -1,4 +1,5 @@
 import { scenarioProgressService } from './ScenarioProgressService.js';
+import { isHybrid, advanceHybrid } from './InvestigationDirector.js';
 
 const EVENT_STATES = new Set(['dormant', 'eligible', 'queued', 'resolved', 'expired']);
 const MOVEMENT_WORDS = /(?:前往|去往|赶往|赶到|进入|回到|返回|移动到|走向|来到|登上|下到|离开.*去|\bgo\b|\bvisit\b|\btravel\b|\bmove\b|\bhead\b|\benter\b|\breturn\b)/i;
@@ -31,12 +32,20 @@ export class ScheduleService {
     }
 
     this._normalizeEvents(session);
-    if (session.scenarioClock.mode === 'finale' && !session.activeScene) {
+    if ((session.scenarioClock.mode === 'finale' || isHybrid(session) && session.combat?.active) && !session.activeScene) {
       return { activeScene: null, intendedLocationId: null, resolvedOffscreenEvents: [] };
     }
     this._promoteEligibleEvents(session);
 
     if (session.activeScene) {
+      const pending = session.scheduledEvents.find(event => event.id === session.activeScene.eventId);
+      if (pending?.minimumResponseTurns && session.activeScene.branchKey === 'nearby') {
+        const intended = this._inferIntendedLocation(session, userText);
+        const placement = this._decidePlacement(session, pending, intended || session.playerLocationId);
+        if (placement.branchKey === 'present') {
+          session.activeScene = this._buildForegroundScene(pending, 'present', placement.locationId, intended, placement.resolutionLocationId);
+        }
+      }
       return {
         activeScene: session.activeScene,
         intendedLocationId: session.activeScene.intendedLocationId || null,
@@ -47,6 +56,7 @@ export class ScheduleService {
     const intendedLocationId = this._inferIntendedLocation(session, userText);
     const effectiveLocationId = intendedLocationId || session.playerLocationId;
     const resolvedOffscreenEvents = [];
+    const coalescedCues = [];
 
     // A player arriving where an off-screen event left traces should encounter
     // the aftermath before another foreground event is selected.
@@ -64,6 +74,15 @@ export class ScheduleService {
     for (const event of eligible) {
       const decision = this._decidePlacement(session, event, effectiveLocationId);
       if (decision.kind === 'defer') continue;
+      const age = (toMinutes(session.scenarioClock.currentTime) || 0) - (toMinutes(event.at) || 0);
+      const overdue = isHybrid(session) ? (session.scenarioFlags.investigation?.actions || 0) - (event.eligibleAtAction ?? Infinity) >= 4 : session.scenarioRules?.pacingVersion === 2 && age >= 90;
+      if (overdue && !event.minimumResponseTurns
+        && !Object.values(event.branches || {}).some(branch => branch.combatUpdate)) {
+        const branch = event.branches?.[decision.branchKey] || {};
+        if (branch.playerCue) coalescedCues.push(branch.playerCue);
+        resolvedOffscreenEvents.push(this._resolveEvent(session, event, decision.branchKey, { visible: true, locationId: decision.locationId }));
+        continue;
+      }
 
       if (decision.kind === 'offscreen') {
         const resolution = this._resolveEvent(session, event, decision.branchKey, {
@@ -75,6 +94,9 @@ export class ScheduleService {
       }
 
       event.status = 'queued';
+      // The player sees this announcement only after the current action completes.
+      event.announcedTurn ??= (session.scenarioClock.turn || 0) + 1;
+      event.announcedAction ??= (session.scenarioFlags.investigation?.actions || 0) + 1;
       session.activeScene = this._buildForegroundScene(
         event,
         decision.branchKey,
@@ -85,7 +107,8 @@ export class ScheduleService {
       break;
     }
 
-    return { activeScene: session.activeScene || null, intendedLocationId, resolvedOffscreenEvents };
+    if (coalescedCues.length) session.scenarioFlags.pendingAmbientCues = coalescedCues;
+    return { activeScene: session.activeScene || null, intendedLocationId, resolvedOffscreenEvents, coalescedCues };
   }
 
   /**
@@ -106,6 +129,8 @@ export class ScheduleService {
       const decision = this._decidePlacement(session, event, session.playerLocationId);
       if (decision.kind === 'defer' || decision.kind === 'offscreen') continue;
       event.status = 'queued';
+      event.announcedTurn ??= session.scenarioClock.turn;
+      event.announcedAction ??= session.scenarioFlags.investigation?.actions || 0;
       session.activeScene = this._buildForegroundScene(
         event,
         decision.branchKey,
@@ -145,11 +170,20 @@ export class ScheduleService {
       return { event, revealedLocations, aftermath: true };
     }
 
-    const resolution = this._resolveEvent(session, event, scene.branchKey, {
+    if (session.scenarioRules?.pacingVersion >= 2 && event.minimumResponseTurns
+      && scene.branchKey === 'nearby' && (isHybrid(session) ? (session.scenarioFlags.investigation?.actions || 0) - (event.announcedAction ?? (event.announcedAction = session.scenarioFlags.investigation?.actions || 0)) : session.scenarioClock.turn - event.announcedTurn) < event.minimumResponseTurns) {
+      scene.announcedAtBoundary = true;
+      return { event: null, revealedLocations: [], awaitingResponse: true };
+    }
+    const missed = isHybrid(session) && event.minimumResponseTurns && scene.branchKey === 'nearby'
+      && session.playerLocationId !== event.placement?.locationId;
+    const resolvedBranch = missed ? (event.branches.expired ? 'expired' : 'absent') : scene.branchKey;
+    const resolution = this._resolveEvent(session, event, resolvedBranch, {
       visible: true,
       locationId: scene.resolutionLocationId || scene.locationId,
     });
     session.activeScene = null;
+    if (missed) resolution.playerConsequence = event.branches[resolvedBranch]?.playerCue;
     return resolution;
   }
 
@@ -158,6 +192,7 @@ export class ScheduleService {
     if (!session.scenarioClock) return { advanced: false, firedEvents: [], newlyEligibleEvents: [] };
 
     this._normalizeEvents(session);
+    if (isHybrid(session) && session.scenarioClock.mode !== 'finale') return advanceHybrid(session);
     if (session.scenarioClock.mode === 'finale') {
       session.scenarioClock.turn = (session.scenarioClock.turn || 0) + 1;
       return {
@@ -187,7 +222,9 @@ export class ScheduleService {
     const activeTrauma = session.sanity?.activeTrauma;
     const traumaCost = Math.max(0, Math.min(15, Number(activeTrauma?.pendingTimePenaltyMinutes) || 0));
     if (traumaCost > 0 || activeTrauma?.expiresAfterNarrativeTurn) session.sanity.activeTrauma = null;
-    const cost = Math.max(minimum, Math.min(maximum, baseCost)) + obstructionCost + traumaCost;
+    const actualObstruction = /阻拦|封锁|绕行|被迫等待/.test(parsed.time_cost_rationale || '');
+    const cost = Math.max(minimum, Math.min(maximum, baseCost)) + (session.scenarioRules?.pacingVersion === 2
+      ? Math.min(5, traumaCost + (actualObstruction ? obstructionCost : 0)) : obstructionCost + traumaCost);
     const current = Math.min(deadline, previous + cost);
     session.scenarioClock.currentTime = formatMinutes(current);
     session.scenarioClock.turn = (session.scenarioClock.turn || 0) + 1;
@@ -252,11 +289,11 @@ export class ScheduleService {
       const player = session.npcs?.find(npc => npc.id === 'npc_000');
       if (player) player.locationId = locationChanged.id;
     }
-    const inferredEvidenceChanges = scenarioProgressService.inferEvidenceChanges(
+    const inferredEvidenceChanges = isHybrid(session) ? [] : scenarioProgressService.inferEvidenceChanges(
       session,
       userText || ''
     );
-    const requestedEvidenceChanges = [...inferredEvidenceChanges, ...(parsed.evidence_changes || [])];
+    const requestedEvidenceChanges = isHybrid(session) ? [] : [...inferredEvidenceChanges, ...(parsed.evidence_changes || [])];
     const mergedEvidenceChanges = new Map();
     for (const change of requestedEvidenceChanges) {
       if (!change || typeof change !== 'object' || !change.id) continue;
@@ -302,6 +339,7 @@ export class ScheduleService {
   }
 
   _promoteEligibleEvents(session) {
+    if (isHybrid(session)) return [];
     const current = toMinutes(session.scenarioClock?.currentTime);
     if (current === null) return [];
     const promoted = [];
@@ -356,7 +394,11 @@ export class ScheduleService {
     const placement = event.placement || { mode: 'global' };
     const current = toMinutes(session.scenarioClock?.currentTime) ?? 0;
     const latest = toMinutes(event.latestAt);
-    const expired = latest !== null && current > latest;
+    const pressure = session.scenarioFlags.investigation?.actions || 0;
+    const protectedWindow = event.minimumResponseTurns && (isHybrid(session)
+      ? event.announcedAction == null || pressure - event.announcedAction < event.minimumResponseTurns
+      : event.announcedTurn == null || session.scenarioClock.turn - event.announcedTurn < event.minimumResponseTurns);
+    const expired = (isHybrid(session) ? pressure - (event.eligibleAtAction ?? pressure) >= 4 : latest !== null && current > latest) && !protectedWindow;
 
     if (placement.mode === 'global') {
       const focus = placement.focusLocationId;
@@ -374,12 +416,18 @@ export class ScheduleService {
     if (effectiveLocationId && effectiveLocationId === eventLocationId) {
       return { kind: 'foreground', branchKey: 'present', locationId: eventLocationId };
     }
+    if (session.scenarioRules?.pacingVersion >= 2 && protectedWindow && event.branches?.nearby) {
+      return { kind: 'foreground', branchKey: 'nearby', locationId: effectiveLocationId, resolutionLocationId: eventLocationId };
+    }
     if (effectiveLocationId && this._areAdjacent(session, effectiveLocationId, eventLocationId)
       && event.branches?.nearby) {
       return { kind: 'foreground', branchKey: 'nearby', locationId: eventLocationId };
     }
 
-    if (event.absencePolicy === 'defer' && !expired) return { kind: 'defer' };
+    if (event.absencePolicy === 'defer' && !expired) {
+      if (event.minimumResponseTurns && event.branches?.nearby) return { kind: 'foreground', branchKey: 'nearby', locationId: effectiveLocationId };
+      return { kind: 'defer' };
+    }
     const branchKey = expired && event.branches?.expired ? 'expired' : 'absent';
     const branch = event.branches?.[branchKey] || {};
     if (branch.playerCue) {
@@ -453,6 +501,7 @@ export class ScheduleService {
 
   _applyBranchConsequences(session, branch, resolutionLocationId) {
     for (const [npcId, update] of Object.entries(branch.npcUpdates || {})) {
+      if (isHybrid(session) && branch.combatUpdate && session.scenarioFlags?.finale_crisis_resolved) continue;
       const npc = session.npcs?.find(candidate => candidate.id === npcId);
       if (!npc) continue;
       if (update.currentState) npc.currentState = update.currentState;
@@ -461,7 +510,8 @@ export class ScheduleService {
       if (update.visibility) npc.visibility = update.visibility;
       if (update.status) npc.status = update.status;
     }
-    if (branch.combatUpdate) session.combat = clone(branch.combatUpdate);
+    const alreadyResolved = session.combat?.active === false && session.combat?.objective === branch.combatUpdate?.objective;
+    if (branch.combatUpdate && !session.scenarioFlags?.finale_crisis_resolved && !alreadyResolved) session.combat = clone(branch.combatUpdate);
     if (!session.scenarioFlags || typeof session.scenarioFlags !== 'object') session.scenarioFlags = {};
     Object.assign(session.scenarioFlags, branch.setFlags || {});
   }

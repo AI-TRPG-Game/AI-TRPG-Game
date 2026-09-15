@@ -42,7 +42,8 @@ export function getSanLabel(value) {
 }
 
 export function getNpcCondition(npc = {}) {
-  if (npc.hp == null || npc.maxHp == null || npc.san == null) return '状态不明';
+  if (npc.observation) return `${npc.status === 'departed' || npc.observation.stale ? '上次见面时：' : ''}${npc.observation.physical || '身体状况尚未观察'} | ${npc.observation.emotional || '情绪尚未观察'}`;
+  if (npc.hp == null || npc.maxHp == null || npc.san == null) return '尚未观察';
 
   const health = npc.hp <= 0
     ? '失去行动能力'

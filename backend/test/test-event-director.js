@@ -15,7 +15,7 @@ function makeSession(eventIds, currentTime, playerLocationId) {
   const ids = Array.isArray(eventIds) ? eventIds : [eventIds];
   return {
     scenarioId: definition.id,
-    scenarioRules: structuredClone(definition.scenarioRules),
+    scenarioRules: { ...structuredClone(definition.scenarioRules), pacingVersion: 2 }, // Legacy time scheduler contract.
     scenarioClock: { currentTime, deadline: '06:00', turn: 0, phase: 'investigation' },
     playerLocationId,
     locations: structuredClone(definition.locations),
@@ -70,6 +70,7 @@ function makeSession(eventIds, currentTime, playerLocationId) {
   assert(prep.activeScene?.branchKey === 'nearby', 'adjacent player should get an interception window');
 
   const remote = makeSession('records_0240', '02:40', 'loc_001');
+  delete remote.scheduledEvents[0].minimumResponseTurns; // Legacy remote-destruction contract.
   prep = service.prepareTurn(remote);
   const event = remote.scheduledEvents[0];
   assert(prep.activeScene?.branchKey === 'absent', 'remote record destruction should immediately stage a perceptible consequence');
@@ -94,6 +95,7 @@ function makeSession(eventIds, currentTime, playerLocationId) {
 // Confession waits for co-location, then leaves a fallback after its window.
 {
   const deferred = makeSession('confession_0310', '03:10', 'loc_001');
+  delete deferred.scheduledEvents[0].minimumResponseTurns; // Legacy timing contract.
   let prep = service.prepareTurn(deferred);
   assert(!prep.activeScene && deferred.scheduledEvents[0].status === 'eligible', 'confession should wait rather than happen remotely at an exact timestamp');
   deferred.playerLocationId = 'loc_008';
@@ -101,6 +103,7 @@ function makeSession(eventIds, currentTime, playerLocationId) {
   assert(prep.activeScene?.branchKey === 'present', 'co-location should stage the trust conversation');
 
   const expired = makeSession('confession_0310', '04:11', 'loc_001');
+  delete expired.scheduledEvents[0].minimumResponseTurns;
   prep = service.prepareTurn(expired);
   assert(prep.activeScene?.branchKey === 'expired', 'missed confession window should immediately stage a perceptible consequence');
   service.commitActiveScene(expired);

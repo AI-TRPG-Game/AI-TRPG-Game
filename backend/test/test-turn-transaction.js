@@ -178,7 +178,7 @@ assert(!restored.scenarioFlags.changed && restored.optionBuffer === '', 'cancel 
   assert(response.session.scenarioClock.currentTime === '06:00' && response.session.scenarioClock.mode === 'finale', 'completed roll turn should freeze the clock at the deadline');
   assert(response.session.scheduledEvents[0].status === 'resolved', 'active event should commit before the finale gate');
   assert(response.session.finaleState.stage === 'resolve_scene' && response.session.subState === 'AWAITING_INPUT', 'active combat should remain playable at the finale gate');
-  assert(response.session.optionBuffer.includes('处理证据'), 'combat-stage ordinary actions should remain until danger is resolved');
+  assert(response.session.optionBuffer.includes('脱离围堵'), 'finale combat must use authored crisis actions');
   assert(
     response.result.refinedHtml.includes('检定已经完成') && !response.result.refinedHtml.includes('结局：'),
     'deadline response should show the resolved action without an ending card'

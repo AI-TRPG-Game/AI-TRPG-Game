@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { createHash } from 'node:crypto';
 import { GameOrchestrator } from '../orchestrator/GameOrchestrator.js';
 import { RequestSessionRepository } from '../persistence/RequestSessionRepository.js';
 
@@ -53,6 +54,18 @@ function startSseStream(res) {
 
 export function createGameController({ llmProvider, llmProviderRegistry }) {
   const router = express.Router();
+  // Retry identical snapshots without rerolling dice or invoking the model twice.
+  // Bounded process-local cache; browser persistence remains unchanged.
+  const submissions = new Map();
+  function once(req, operation) {
+    const key = createHash('sha256').update(req.path + JSON.stringify(req.body)).digest('hex');
+    for (const [id, entry] of submissions) if (Date.now() - entry.at > 900000) submissions.delete(id);
+    if (submissions.has(key)) return submissions.get(key).promise;
+    if (submissions.size >= 32) submissions.delete(submissions.keys().next().value);
+    const promise = Promise.resolve().then(operation).catch(error => { submissions.delete(key); throw error; });
+    submissions.set(key, { at: Date.now(), promise });
+    return promise;
+  }
 
   router.get('/llm/profiles', (_req, res) => {
     if (llmProviderRegistry) {
@@ -225,11 +238,11 @@ export function createGameController({ llmProvider, llmProviderRegistry }) {
     try {
       const session = requireSession(req);
       const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
-      const result = await orchestrator.confirmDice(req.params.id, {
+      const result = await once(req, () => orchestrator.confirmDice(req.params.id, {
         onDebug: (log) => sendSse('debug', log),
         // 系统判定结果在 LLM 调用前就推送，让用户立即看到【使用XX技能（技能点YY），判定结果Z，等级】
         onSystemMessage: (msg) => sendSse('system-message', { message: msg }),
-      });
+      }));
       sendSse('done', result);
     } catch (err) {
       sendSse('error', { message: err.message });
@@ -342,9 +355,9 @@ export function createGameController({ llmProvider, llmProviderRegistry }) {
     try {
       const session = requireSession(req);
       const orchestrator = createStatelessOrchestrator({ session, llmProvider, llmProviderRegistry });
-      const result = await orchestrator.handleMessage(req.params.id, text.trim(), {
+      const result = await once(req, () => orchestrator.handleMessage(req.params.id, text.trim(), {
         onDebug: (log) => sendSse('debug', log),
-      });
+      }));
       sendSse('done', result);
     } catch (err) {
       sendSse('error', { message: err.message });
@@ -356,8 +369,9 @@ export function createGameController({ llmProvider, llmProviderRegistry }) {
   return router;
 }
 
-export function createApp({ llmProvider, llmProviderRegistry }) {
+export function createApp({ llmProvider, llmProviderRegistry, lifecycleMiddleware }) {
   const app = express();
+  if (lifecycleMiddleware) app.use(lifecycleMiddleware);
   app.use(cors());
   app.use(express.json({ limit: '2mb' }));
   app.use('/api', createGameController({ llmProvider, llmProviderRegistry }));

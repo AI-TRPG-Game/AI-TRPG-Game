@@ -206,6 +206,7 @@ export class GameUIController {
   // ── 初始化 ──
   async _init() {
     try {
+      await this._initLauncher();
       await this._loadLlmProfiles();
       const hash = window.location.hash.slice(1);
       const storedId = hash || sessionStore.getCurrentSessionId();
@@ -223,6 +224,7 @@ export class GameUIController {
   }
 
   _bindEvents() {
+    document.getElementById('btn-exit-game').addEventListener('click', () => this._exitGame());
     this.sendButton.addEventListener('click', () => this._sendMessage());
     this.promptInput.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !this._isInputBlocked()) this._sendMessage();
@@ -786,6 +788,8 @@ export class GameUIController {
   }
 
   async _confirmDice() {
+    this._diceRequestActive = true;
+    this._syncInputControls();
     const scrollState = this._captureMessageScroll();
     this._removeDiceConfirm();
     this._setInputLocked(true);
@@ -823,6 +827,8 @@ export class GameUIController {
       this._appendMessage(`错误: ${err.message}`, 'error');
     } finally {
       this._clearWaiting();
+      this._diceRequestActive = false;
+      this._syncInputControls();
       // 若触发递归 dice（NARRATION_II 又含 <dice>），输入保持锁定
       if (this.session?.subState !== 'DICE_PENDING') {
         this._setInputLocked(false);
@@ -1113,10 +1119,46 @@ export class GameUIController {
   }
 
   _syncInputControls() {
+    const exit = document.getElementById('btn-exit-game');
+    if (exit) exit.disabled = Boolean(this._exiting || this._diceRequestActive || (this.inputLocked && this.session?.subState !== 'DICE_PENDING'));
     const blocked = this._isInputBlocked();
     this.promptInput.disabled = blocked;
     this.sendButton.disabled = blocked;
     if (this.modelProfileSelect) this.modelProfileSelect.disabled = blocked;
+  }
+
+  async _initLauncher() {
+    try {
+      const response = await fetch('/launcher/session');
+      if (!response.ok) return;
+      const info = await response.json();
+      if (!info.token) return;
+      this._launcherToken = info.token;
+      document.getElementById('btn-exit-game').hidden = false;
+    } catch { /* Development mode has no launcher controls. */ }
+  }
+
+  async _exitGame() {
+    if (!this._launcherToken || this._exiting || document.getElementById('btn-exit-game').disabled) return;
+    this._exiting = true;
+    const wasLocked = this.inputLocked;
+    this._setInputLocked(true);
+    try {
+      if (this.session) await sessionStore.saveSession(this.session);
+      const response = await fetch('/launcher/shutdown', {
+        method: 'POST', headers: { 'x-launcher-token': this._launcherToken },
+      });
+      if (!response.ok) throw new Error('游戏仍有请求正在处理，请稍后退出。');
+      document.body.replaceChildren();
+      const message = document.createElement('p');
+      message.textContent = '游戏已保存并关闭，可以关闭此标签页。';
+      message.style.cssText = 'padding:48px;font-size:22px';
+      document.body.append(message);
+    } catch (error) {
+      this._appendMessage(`退出失败：${error.message}`, 'error');
+      this._exiting = false;
+      this._setInputLocked(wasLocked);
+    }
   }
 
   _areOptionButtonsLocked() {
@@ -1189,6 +1231,7 @@ export class GameUIController {
       const suspicion = Number(this.session.suspicion) || 0;
       const suspicionState = getSuspicionDisplay(suspicion);
       this.scenarioStatus.textContent = `⏱ ${clock.currentTime} / ${clock.deadline} · ${getScenarioPhaseLabel(clock.phase)} · 证据 ${secured}/${evidenceTotal}（已发现${discovered}） · 真相 ${provenFacts}/${Object.keys(truths).length} · 怀疑 ${suspicion}/10（${suspicionState.label}）`;
+      if (this.session.scenarioRules?.pacingVersion === 3) this.scenarioStatus.textContent = `章节：${getScenarioPhaseLabel(clock.phase)} · 发车压力 ${Math.min(26, this.session.scenarioFlags?.investigation?.actions || 0)}/26 · 证据 ${secured}/${evidenceTotal} · 真相 ${provenFacts}/${Object.keys(truths).length} · 怀疑 ${suspicion}/10`;
       this.scenarioStatus.title = `调查证据分为“已发现”和“已保全”；已保全证据才能支撑结局。怀疑度${suspicion}/10：${suspicionState.effect}。`;
     } else {
       // 普通自由剧本没有剧本时钟；明确告知入口，避免把空白状态误认为显示故障。
@@ -1211,6 +1254,11 @@ export class GameUIController {
     if (player) {
       this.playerInfo.innerHTML = `<span class="sidebar-label">玩家</span> <span class="sidebar-value">${escapeHtml(playerName)}</span> <button class="sidebar-item-action sbb-edit" data-detail="player">✎</button>`;
       this.playerInfo.classList.remove('empty');
+      const resources = this.session.scenarioFlags?.investigation;
+      if (this.session.scenarioRules?.pacingVersion === 3 && resources) {
+        const trauma = this.session.sanity?.activeTrauma?.remainingChecks || 0;
+        this.playerInfo.insertAdjacentHTML('beforeend', `<small style="display:block">敷料 ${Number(resources.dressings)}份 · 安全休整剩余 ${Math.max(0, 2 - resources.grounding)}次 · 暂时压力剩余 ${trauma}次相关检定</small>`);
+      }
     } else {
       this.playerInfo.innerHTML = '尚未设定…';
       this.playerInfo.classList.add('empty');
@@ -1235,18 +1283,33 @@ export class GameUIController {
       const catalog = this.session.scenarioRules?.clueCatalog || {};
       const discoveredEvidence = evidence.filter(item => item.discovered !== false);
       const evidenceHelp = '<div class="sidebar-evidence-help" title="已发现：你知道线索存在，但它还不能可靠带走或复核。已保全：已经拍照、录音、抄录、取样、封存或带走，可以用于最终真相判定。">“已发现”提示调查方向；“已保全”才可用于证明。</div>';
-      this.evidencePanel.innerHTML = evidenceHelp + (discoveredEvidence.length
+      const labels = { murder: '死因', coverup: '记录篡改', seventh_survivor: '人数疑点', culprit: '责任归属' };
+      const knownIds = new Set(discoveredEvidence.map(item => item.id));
+      const securedIds = new Set(discoveredEvidence.filter(item => item.secured).map(item => item.id));
+      const facts = Object.entries(this.session.scenarioRules?.truths || {}).filter(([, ids]) => ids.some(id => knownIds.has(id)));
+      const notebook = facts.map(([key, ids]) => `${labels[key] || '调查事项'}：${ids.every(id => securedIds.has(id)) ? '已有证据支持' : '尚缺可复核的证明'}`).join('；');
+      this.evidencePanel.innerHTML = evidenceHelp + (notebook ? `<div class="sidebar-evidence-help">调查笔记：${escapeHtml(notebook)}</div>` : '') + (discoveredEvidence.length
         ? discoveredEvidence.map(item => {
           const definition = catalog[item.id] || {};
           const status = item.secured ? '已保全（可用于证明）' : '已发现（不计入证明）';
           const source = item.source || definition.source || '未命名线索';
           const description = item.description || definition.description || '';
           const nextStep = !item.secured && definition.preservationHint
-            ? `<small>下一步：${escapeHtml(definition.preservationHint)}</small>`
+            ? `<small>下一步：${escapeHtml(definition.preservationHint)}</small><button type="button" data-preserve="${escapeHtml(item.id)}" ${this._isInputBlocked() ? 'disabled' : ''}>执行保全行动</button>`
             : '';
           return `<div class="sidebar-evidence-item"><span class="sidebar-evidence-status">${item.secured ? '✓' : '•'}</span><span><strong>${escapeHtml(source)}</strong><small>${escapeHtml(status)}${description ? ` · ${escapeHtml(description)}` : ''}</small>${nextStep}</span></div>`;
         }).join('')
         : '<div class="sidebar-clickable empty" style="font-size:12px;">尚未发现证据</div>');
+      this.evidencePanel.insertAdjacentHTML('beforeend', '<button type="button" data-game-help>玩法帮助</button>');
+      this.evidencePanel.querySelector('[data-game-help]').onclick = () => { if (!this._isInputBlocked()) { this.promptInput.value = '玩法帮助'; this._sendMessage(); } };
+      this.evidencePanel.querySelectorAll('[data-preserve]').forEach(button => {
+        button.onclick = () => {
+          if (this._isInputBlocked()) return;
+          const clue = catalog[button.dataset.preserve];
+          this.promptInput.value = `保全${clue.source}：${clue.preservationHint}`;
+          this._sendMessage();
+        };
+      });
     }
 
     // NPC —— 名称 + 编辑（按 id 引用）。npc_000 是玩家的内部实体，单独显示在“玩家状态”。

@@ -8,7 +8,8 @@ export const BIRCH_STATION_TUTORIAL = {
   worldSettings: '1929年深秋，暴雨中的雾港号停靠在废弃白桦站。列车内发生了一桩看似密室的谋杀；调查会逐步滑向与矿难旧案和异常资料有关的心理恐怖。',
   player,
   scenarioRules: {
-    time: { minimumMinutes: 10, maximumMinutes: 60 },
+    time: { minimumMinutes: 10, maximumMinutes: 20 },
+    pacingVersion: 3,
     initialLocationId: 'loc_001',
     // 这些地点在开局即已写好，但只有被探索或由计划事件揭示后才加入玩家侧边栏。
     locationCatalog: {
@@ -41,9 +42,9 @@ export const BIRCH_STATION_TUTORIAL = {
       san_signal_0040: { at: '00:40', locationId: 'loc_003', severity: 'unease', target: 'player', label: '站台尽头本不该亮起的信号灯' },
       san_blackout_0110: { at: '01:10', locationId: 'loc_002', severity: 'major', target: 'player', label: '停电后手提箱里传出的第二段呼吸声' },
       san_portrait_0140: { at: '01:40', locationId: 'loc_005', severity: 'major', target: 'player', label: '画中第七名乘客转过头来' },
-      san_records_0240: { at: '02:40', locationId: 'loc_007', severity: 'major', target: 'player', label: '被篡改的医疗转运记录' },
-      san_confession_0310: { at: '03:10', locationId: 'loc_008', severity: 'major', target: 'player', label: '幸存者供词中不可能存在的第七个人' },
-      san_depths_0340: { at: '03:40', locationId: 'loc_009', severity: 'catastrophe', target: 'player', label: '地下入口积水下的异常矿物' },
+      san_records_0240: { at: '02:20', locationId: 'loc_007', severity: 'major', target: 'player', label: '被篡改的医疗转运记录' },
+      san_confession_0310: { at: '02:50', locationId: 'loc_008', severity: 'major', target: 'player', label: '幸存者供词中不可能存在的第七个人' },
+      san_depths_0340: { at: '03:30', locationId: 'loc_009', severity: 'catastrophe', target: 'player', label: '地下入口积水下的异常矿物' },
     },
     clueCatalog: {
       evidence_001: { category: 'murder', source: '包厢门锁', reliability: 'medium', description: '锁芯内侧有新鲜刮痕，说明门锁可能从外部被动过。', discoveryHint: '检查顾言包厢的门锁、门框和反锁结构。', preservationHint: '给锁芯刮痕拍照，并用纸笔拓印刮痕方向。', locationId: 'loc_001', keywords: ['门锁', '门框', '反锁', '锁芯', '刮痕'], truths: ['murder'] },
@@ -75,7 +76,7 @@ export const BIRCH_STATION_TUTORIAL = {
 
 候车厅里还有一位撑着湿画布的乘客苏棠。她是替报社画插图的年轻画师，停电前一直在画白桦站；她说画里原本只有六个人，却不肯解释为什么第七个身影总在下一笔之后出现。乘务员休息室里则有林晚——白桦站临时检修员，今晚负责看管旧站的钥匙和检修班表。她对顾言的死表现得过分平静，只说自己“没有离开过休息室”。这两个人都不是陌生的路人：她们的证词和手里的东西，可能分别连接着画、调度记录与地下通道。
 
-你以调查记者的身份可以提问、记录、比对说辞，也可以不按任何人的安排行动。但从现在起，每一次停留都会消耗时间：06:00，雾港号将恢复通行，白桦站和车上的人都会被雨幕带走。
+你以调查记者的身份可以提问、记录、比对说辞，也可以不按任何人的安排行动。每次有意义的行动都会推进发车压力；熟悉安全区域的返回移动、查看笔记和请求帮助不单独增加压力。夜色中的时刻只是氛围参考，章节与行动决定这场调查的进度。压力到达截止时，雾港号将恢复通行。
 
 包厢门锁内侧有一道新鲜刮痕，地毯边缘黏着不属于车厢的湿泥。顾言随身的半段录音还在你的口袋里，另一半却不见踪影。
 
@@ -94,7 +95,7 @@ export const BIRCH_STATION_TUTORIAL = {
 
 你可以点击下方选项，也可以直接输入任何行动，例如“检查针孔”“追问许薇刚才听见什么”“去行李车比对湿泥”或“把录音带交给医生观察”。主持人会根据行动推进故事；需要冒险时会出现检定确认，确认后由系统掷骰并说明结果。
 
-每次有效行动都会推进游戏内时间。列车会在 **06:00** 发车，因此搜查、移动和长谈都要有所取舍；时间到达关键节点时，新地点、人物动向和危机会出现。左侧地点栏会逐步加入你已经发现的区域，并以“你在此”标出当前位置。
+新试炼以 **约24–30次有意义的行动** 为目标。发车压力到26时进入终局，最多再处理三次危机行动，然后作出最终决定。关键事件随章节出现，提示不是立即判定结果；你有机会回应。地点栏会逐步加入已发现区域，并标明当前位置。
 
 证据只有在被**取得或保全**后才能支撑你在结局时揭露真相。公开逼问、强行搜查或惊动嫌疑人会提高怀疑度，令行动变慢、证据更难保护。遭遇不该理解的事物时，SAN 会下降；低 SAN 会给主动检定带来惩罚，单次重度损失还可能留下短期创伤。
 
@@ -117,6 +118,7 @@ export const BIRCH_STATION_TUTORIAL = {
     { id: 'npc_005', name: '林晚', baseDescription: '白桦站临时检修员，负责旧站钥匙、检修班表和地下入口。', currentState: '在乘务员休息室整理班表，声称自己没有离开过。', locationId: 'loc_008', importance: 'key', hp: null, maxHp: null, san: null, maxSan: null, visibility: 'visible', status: 'active', attributes: null, firstSeenAt: 0, lastUpdatedAt: 0 },
   ],
   inventory: [
+    { id: 'item_field_kit', name: '记者随身取证包', status: '已获得', description: '相机、录音工具、纸笔、样本袋，以及两份基础敷料。安全处输入“包扎伤口”使用敷料；剩余次数由规则记录。', firstSeenAt: 0, lastUpdatedAt: 0 },
     { id: 'item_001', name: '顾言的半段录音', status: '已获得', description: '录音在最关键处中断，信中警告不要听完整段。', firstSeenAt: 0, lastUpdatedAt: 0 },
   ],
   evidence: [
@@ -185,7 +187,7 @@ export const BIRCH_STATION_TUTORIAL = {
       },
     },
     {
-      id: 'records_0240', at: '02:40', latestAt: '03:00', phase: 'investigation', priority: 95,
+      id: 'records_0240', at: '02:20', latestAt: '03:00', phase: 'investigation', minimumResponseTurns: 2, priority: 95,
       placement: { mode: 'fixed', locationId: 'loc_006', requiredParticipants: ['npc_003'] },
       absencePolicy: 'resolve_offscreen', status: 'dormant', fired: false, outcome: null,
       branches: {
@@ -219,7 +221,7 @@ export const BIRCH_STATION_TUTORIAL = {
       },
     },
     {
-      id: 'confession_0310', at: '03:10', latestAt: '04:10', phase: 'investigation', priority: 75,
+      id: 'confession_0310', at: '02:50', latestAt: '04:10', phase: 'investigation', minimumResponseTurns: 2, priority: 75,
       placement: { mode: 'fixed', locationId: 'loc_008', requiredParticipants: ['npc_005'] },
       absencePolicy: 'defer', status: 'dormant', fired: false, outcome: null,
       branches: {
@@ -253,7 +255,7 @@ export const BIRCH_STATION_TUTORIAL = {
       },
     },
     {
-      id: 'entrance_0340', at: '03:40', phase: 'crisis', priority: 50,
+      id: 'entrance_0340', at: '03:30', phase: 'crisis', priority: 50,
       placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
       branches: {
         foreground: {
@@ -266,7 +268,7 @@ export const BIRCH_STATION_TUTORIAL = {
       },
     },
     {
-      id: 'seizure_0440', at: '04:40', phase: 'crisis', priority: 100,
+      id: 'seizure_0440', at: '04:20', phase: 'crisis', priority: 100,
       placement: { mode: 'player_current', requiredParticipants: ['npc_003', 'npc_001'] },
       status: 'dormant', fired: false, outcome: null,
       branches: {
@@ -286,14 +288,14 @@ export const BIRCH_STATION_TUTORIAL = {
       },
     },
     {
-      id: 'departure_0510', at: '05:10', phase: 'aftermath', priority: 85,
+      id: 'departure_0510', at: '05:00', phase: 'aftermath', priority: 85,
       placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
       branches: {
         foreground: { outcome: 'departure_warning', instruction: '让发车广播和人员公开站队收缩调查空间，引导玩家开始处理证据和最终立场，但仍保留行动选择。', playerCue: '雾港号第一次拉响发车预备汽笛，乘务员开始封闭车门；留给调查和转移证据的时间已经所剩无几。', playerOptions: ['A. 立即整理并保全尚未固定的关键证据', 'B. 找到愿意作证的人，确认最后立场', 'C. 放弃次要线索，赶往最关键的未调查地点', 'D. 自由行动'], setFlags: { departure_warning_given: true } },
       },
     },
     {
-      id: 'last_boarding_0550', at: '05:50', phase: 'aftermath', priority: 110,
+      id: 'last_boarding_0550', at: '05:40', phase: 'aftermath', priority: 110,
       placement: { mode: 'global' }, status: 'dormant', fired: false, outcome: null,
       branches: {
         foreground: { outcome: 'last_choice_window', instruction: '发出最后登车警告，明确玩家只剩一次关键取舍。给出的结局选项必须使用“最终决定：公开真相 / 最终决定：保全并带走证据 / 最终决定：销毁或压下真相 / 最终决定：撤离白桦站”这类明确措辞，避免把普通移动误判为最终选择。', playerCue: '最后登车警告穿透雨幕，车门即将关闭；你必须决定如何处置已经掌握的真相与证据。', playerOptions: ['A. 最终决定：公开真相', 'B. 最终决定：保全并带走证据', 'C. 最终决定：销毁或压下真相', 'D. 最终决定：撤离白桦站'], setFlags: { final_choice_requested: true } },

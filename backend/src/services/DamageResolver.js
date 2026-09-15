@@ -1,5 +1,6 @@
 import { diceService } from './DiceService.js';
 import { scenarioProgressService } from './ScenarioProgressService.js';
+import { isHybrid, state as investigationState } from './InvestigationDirector.js';
 import {
   ACTIONS, ACTION_TYPE, SKILL_CHECK, SANCHECK, SAN_SEVERITY, SAN_EVENT_ID, DIRECT,
   ON_SUCCESS, ON_FAIL, CHANGES, BONUS_DICE, PENALTY_DICE,
@@ -94,17 +95,22 @@ export class DamageResolver {
     const trauma = session.sanity?.activeTrauma;
     const penaltyDice = Math.max(0, Math.min(2, Number(trauma?.pendingSkillPenaltyDice) || 0));
     if (penaltyDice > 0) {
-      session.sanity.activeTrauma = null;
+      if (isHybrid(session) && trauma.remainingChecks > 1) trauma.remainingChecks--;
+      else session.sanity.activeTrauma = null;
     }
     return penaltyDice;
   }
 
   _processPlayerSkillCheck(session, action, departedNpcs) {
     const skillName = action.skill_name;
-    const skillPoint = action.skill_point;
+    const skillPoint = isHybrid(session) ? Number(new RegExp(`${skillName}[：:\\s]+(\\d+)`).exec(session.player || '')?.[1] || 0) : action.skill_point;
     const bonusDice = action[BONUS_DICE] || 0;
-    const traumaPenaltyDice = this._consumeTraumaSkillPenalty(session);
-    const penaltyDice = Math.min(2, (action[PENALTY_DICE] || 0) + this._sanPenaltyDice(session) + traumaPenaltyDice);
+    const mental = /侦查|聆听|图书馆|心理学/.test(skillName);
+    let traumaPenaltyDice = isHybrid(session) && !mental ? 0 : this._consumeTraumaSkillPenalty(session);
+    const p = this._findNpc(session, 'player');
+    const injuryPenalty = isHybrid(session) && /闪避|攀爬|跳跃|斗殴/.test(skillName) && (p.hp <= Math.floor(p.maxHp / 2) || investigationState(session).injuries.some(i => !i.treated && i.damage >= Math.ceil(p.maxHp / 2))) ? 1 : 0;
+    const sanPenalty = isHybrid(session) ? (mental ? p.san <= 30 ? 2 : p.san <= 45 ? 1 : 0 : 0) : this._sanPenaltyDice(session);
+    const penaltyDice = Math.min(2, (action[PENALTY_DICE] || 0) + sanPenalty + traumaPenaltyDice + injuryPenalty);
     const onSuccess = action[ON_SUCCESS] || [];
     const onFail = action[ON_FAIL] || [];
     const onCriticalSuccess = action[ON_CRITICAL_SUCCESS] || [];
@@ -112,6 +118,10 @@ export class DamageResolver {
 
     const roll = diceService.rollWithBonusPenalty(bonusDice, penaltyDice);
     const level = diceService.evaluateSuccess(skillPoint, roll.value);
+    if (isHybrid(session) && investigationState(session).transaction) {
+      const tx = investigationState(session).transaction;
+      (tx.checkResults ||= []).push({ skill: skillName, roll: roll.value, success: this._isSuccess(level), level });
+    }
 
     // 生成 A 结果主消息
     const bonusDesc = bonusDice > 0 ? `，奖励骰${bonusDice}` : '';
@@ -206,13 +216,15 @@ export class DamageResolver {
     const isSuccess = roll.value <= sanValue;
 
     const severity = eventResolution.severity ?? (action[SAN_SEVERITY] || 'major');
-    const formulas = {
+    const formulas = isHybrid(session) ? {
+      unease: { success: '0', failure: '1d3' }, major: { success: '0', failure: '1d4+1' }, catastrophe: { success: '1', failure: '1d6' },
+    } : {
       unease: { success: '1d3', failure: '1d5' },
       major: { success: '1d4+1', failure: '1d8+2' },
       catastrophe: { success: '1d6+2', failure: '2d6+3' },
     };
     const damageFormula = (formulas[severity] || formulas.major)[isSuccess ? 'success' : 'failure'];
-    const damage = diceService.rollFormula(damageFormula);
+    const damage = /^\d+$/.test(damageFormula) ? Number(damageFormula) : diceService.rollFormula(damageFormula);
 
     const oldSan = target.san;
     const previousState = target.id === 'npc_000'
@@ -221,6 +233,7 @@ export class DamageResolver {
     const maxSan = target.maxSan ?? 99;
     target.san = Math.max(0, Math.min(maxSan, target.san - damage));
     const actualDamage = oldSan - target.san;
+    if (isHybrid(session) && !isSuccess) session.sanity.activeTrauma = { pendingSkillPenaltyDice: 1, remainingChecks: actualDamage >= 5 ? 2 : 1, label: '暂时压力' };
 
     // B 结果格式：固定文案"直视了不可直视之物"
     const targetName = this._getTargetName(target);
@@ -269,6 +282,7 @@ export class DamageResolver {
   }
 
   _applyAcuteTrauma(session, sanLoss) {
+    if (isHybrid(session)) return sanLoss >= 5 ? ['【暂时压力】接下来两次相关观察或集中注意的检定承受惩罚，可在安全处稳定情绪。'] : [];
     // 参照 CoC 的单次重度 SAN 损失：立即出现一次短期创伤，避免 SAN 只成为结局数值。
     if (sanLoss < 5) return [];
     scenarioProgressService.refreshSanity(session);
@@ -350,6 +364,7 @@ export class DamageResolver {
 
     const actualChange = Math.abs(newValue - oldValue);
     target[attr] = newValue;
+    if (isHybrid(session) && target.id === 'npc_000' && attr === 'hp' && effect === 'damage') investigationState(session).injuries.push({ actionId: investigationState(session).transaction?.id, damage: actualChange, treated: false });
 
     // 生成状态词
     const statusWord = this.getStatusWord(attr, actualChange, newValue, effect);
