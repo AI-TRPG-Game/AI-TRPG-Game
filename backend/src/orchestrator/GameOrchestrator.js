@@ -146,7 +146,7 @@ export class GameOrchestrator {
       flowType: FlowType.STORY_OPENING,
       timestamp: new Date().toISOString(),
     });
-    this._pushDisplay(session, 'system', '【欢迎来到白桦站】现在是00:10，列车将在06:00发车。点击选项或直接描述行动；调查会消耗时间，地点与线索会随进展逐步揭示。');
+    this._pushDisplay(session, 'system', '【欢迎来到白桦站】每次只选移动或一个当前行动；移动后再调查，请分两次提交。进度以发车压力计数，时刻仅供氛围参考。右侧证据的“详细信息”可免费查看条件，行动按钮则会提交实际行动。完整规则见下方新手引导。');
     this._pushDisplay(session, 'kp', textRefiner.refine(FlowType.STORY_OPENING, openingParsed).html);
     this.repository.save(session);
     return { session: session.toClientJSON() };

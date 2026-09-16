@@ -10,6 +10,10 @@ function assert(condition, message) {
 }
 
 const definition = BIRCH_STATION_TUTORIAL;
+assert(definition.opening.narration.includes('移动到一个地点，或在当前地点执行一个有意义的行动'), 'intro explains movement/action exclusivity');
+assert(definition.opening.narration.includes('澄清不消耗行动压力') && definition.opening.narration.includes('单独移动可以不增加压力'), 'intro distinguishes free clarification and safe movement');
+for (const label of ['详细信息','重要地点','调查证据','玩家状态','NPC状态','物品仓库','玩法帮助']) assert(definition.opening.narration.includes(label), `intro explains ${label}`);
+assert(definition.opening.narration.includes('立即提交对应行动') && definition.opening.narration.includes('查看地点资料不等于移动'), 'intro distinguishes browsing information from taking actions');
 assert(definition.opening.narration.includes('苏棠') && definition.opening.narration.includes('林晚'), 'opening should introduce all scheduled named characters');
 assert(definition.npcs.some(npc => npc.name === '苏棠' && npc.visibility === 'visible'), 'Su Tang should be a visible authored NPC');
 assert(definition.npcs.some(npc => npc.name === '林晚' && npc.visibility === 'visible'), 'Lin Wan should be a visible authored NPC');
